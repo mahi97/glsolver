@@ -51,8 +51,18 @@ public:
     void delete_arc(int a);                    // by arc id
     // Contract pre-terminal p into terminal t along the alive arc a=(p,t) [Def 2.1].
     // Returns the parent (orig_head of a). Redirected arcs get new ids; duplicates are merged.
-    // Newly created arc ids are appended to `created` (may be null).
+    // Newly created arc ids are appended to `created`, killed arc ids to `deleted` (either may be null).
     int contract(int p, int t, std::vector<int>* created = nullptr, std::vector<int>* deleted = nullptr);
+    // What the most recent contract() did, so that a hook called AFTER the mutation can still tell the
+    // paper's case d^+(p) = 1 [Lem 7.3, O3] from a contraction that also deleted other out-arcs of p
+    // (allowed by [Def 2.1]; those deletions can move tightest cuts of unaffected vertices). `version` is the
+    // graph version right after that contraction; p == -1 before the first one.
+    struct ContractionRecord {
+        int p = -1, t = -1;
+        int out_degree = 0;        // d^+(p) at contraction time, (p,t) included
+        uint64_t version = 0;
+    };
+    const ContractionRecord& last_contraction() const { return last_contraction_; }
     void remove_terminal(int t);               // operation (i)
     void remove_vertex(int v);                 // generic (rounding)
 
@@ -71,9 +81,13 @@ private:
     int live_arcs_ = 0;
     uint64_t version_ = 0;
 
+    std::vector<int> pos_out_, pos_in_;             // per arc id: position in out_[tail] / in_[head] (-1 if dead)
+    ContractionRecord last_contraction_;
+
     static uint64_t key(int u, int v) { return (uint64_t(uint32_t(u)) << 32) | uint32_t(v); }
     int add_arc(int u, int v, int orig_head);
     void erase_from(std::vector<int>& lst, int a);
+    void kill_arc(int a, bool erase_out, bool erase_in);  // mark dead + unregister, no version bump
 };
 
 }  // namespace glcore

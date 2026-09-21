@@ -9,6 +9,7 @@
 // All operations read the *current* Graph; a VertexFlow is only meaningful for the graph version it was
 // last validated against (see `version`). Paths are stored as arc ids in `path_arcs` (per path).
 #pragma once
+#include <memory>
 #include <vector>
 
 #include "bitset.hpp"
@@ -41,6 +42,13 @@ public:
     struct Scratch;  // opaque per-thread workspace (queues, visited stamps, arc/vertex flags)
     Scratch* new_scratch() const;
     void free_scratch(Scratch*) const;
+    // RAII owner for a Scratch (the deleter never needs the complete type).
+    struct ScratchDeleter {
+        const FlowEngine* engine = nullptr;
+        void operator()(Scratch* s) const { if (engine && s) engine->free_scratch(s); }
+    };
+    using ScratchPtr = std::unique_ptr<Scratch, ScratchDeleter>;
+    ScratchPtr make_scratch() const { return ScratchPtr(new_scratch(), ScratchDeleter{this}); }
 
     void compute_max_flow(int v, VertexFlow& f, Scratch& s, bool compute_cut) const;
 
@@ -62,10 +70,16 @@ public:
     // ... x -(a_new)-> t, where a_new is the redirected arc id (found via graph lookup). Paths not through p
     // are unchanged. Must be called after Graph::contract with the same arguments.
     void translate_after_contraction(VertexFlow& f, int p, int t) const;
+    // True iff translate_after_contraction(f, p, t) is well defined: f.v != p and the path of f through p
+    // (if any) continues along the arc (p,t) (O3 needs d^+(p) = 1 at contraction time; a flow whose path
+    // leaves p elsewhere must be recomputed instead). Read-only, O(total path length).
+    bool can_translate_after_contraction(const VertexFlow& f, int p, int t) const;
 
     const Graph& graph() const { return g_; }
 private:
     const Graph& g_;
+    void rebuild_paths(VertexFlow& f, Scratch& s) const;          // explicit paths from the flag state
+    void remove_path(VertexFlow& f, size_t i, Scratch& s) const;  // clear flags of path i and drop it
 };
 
 }  // namespace glcore

@@ -18,4 +18,5 @@ PYBIND11_MODULE(_core, m) {
     glcore::bind_graph_flow(m);
     glcore::bind_matching_dag(m);
     glcore::bind_solver(m);
+    glcore::bind_solver_weighted(m);
 }

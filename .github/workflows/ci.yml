@@ -46,8 +46,12 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0
         run: |
+          # libstdc++ must be preloaded next to libasan: CPython does not link libstdc++ itself, and the
+          # __cxa_throw interceptor of libasan resolves the real symbol at ASan init (before the extension
+          # module dlopen()s libstdc++), so the first C++ exception would otherwise abort the interpreter.
           LIBASAN=$(gcc -print-file-name=libasan.so)
-          LD_PRELOAD=$LIBASAN pytest -q -m "not slow" tests/test_core_flow.py tests/test_core_dag.py tests/test_core_matching.py tests/test_core_solver.py tests/test_core_review.py
+          LIBSTDCXX=$(gcc -print-file-name=libstdc++.so)
+          LD_PRELOAD="$LIBASAN $LIBSTDCXX" pytest -q -m "not slow" tests/test_core_flow.py tests/test_core_dag.py tests/test_core_matching.py tests/test_core_solver.py tests/test_core_review.py
 
   docker:
     runs-on: ubuntu-latest

@@ -20,3 +20,6 @@ _skbuild/
 *.gif
 *.mp4
 /tmp/
+benchmarks/instances/
+!benchmarks/results/sample_smoke.jsonl
+tests/.exhaustive_tally.json

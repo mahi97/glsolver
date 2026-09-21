@@ -57,4 +57,9 @@ per-index slots and reduce deterministically.
 paper_notes §7.2 plus the FESAC/DAG invariants into the core; on failure the
 core raises an exception carrying the full state, which the Python layer
 serializes into `regression/` via `glsolver.testing.regression.save_failure`.
-`GLCORE_SANITIZE=ON` builds with ASan/UBSan (used in CI).
+`GLCORE_SANITIZE=ON` builds with ASan/UBSan (used in CI). Running the tests then
+needs both runtimes preloaded, `LD_PRELOAD="$(gcc -print-file-name=libasan.so)
+$(gcc -print-file-name=libstdc++.so)" pytest ...` (plus `ASAN_OPTIONS=detect_leaks=0`):
+CPython does not link libstdc++, and libasan's `__cxa_throw` interceptor resolves
+the real symbol at ASan init, before the extension module loads libstdc++, so
+preloading libasan alone aborts the interpreter on the first C++ exception.

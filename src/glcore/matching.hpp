@@ -12,6 +12,8 @@ std::vector<int> saturating_matching(const Graph& g, const std::vector<int>& S);
 std::vector<int> saturating_matching(const Graph& g);
 
 // Inclusion-minimal nonempty S ⊆ T with no saturating matching (paper's procedure); empty if T saturable.
+// Any inclusion-minimal deficient set would satisfy [Lem 7.6]; this one is the set the reference
+// (glref.matching.minimal_hall_deficient_set) returns, so core and reference agree exactly.
 std::vector<int> minimal_hall_deficient_set(const Graph& g);
 
 }  // namespace glcore
