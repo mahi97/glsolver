@@ -113,3 +113,15 @@ on `k`-connected undirected inputs, giving `O(n k (n+m))` overall. Open.
   undirected structure (P3).
 * **Skipping cut refresh after terminal removal when κ is unchanged.**
   Counterexample (paper_notes §13.3): new essential terminals appear.
+
+### C3. GPU acceleration of the certificate phase (2026-09-21)
+
+The machine has an NVIDIA GB10 (Grace–Blackwell, unified memory, CUDA 13.0
+toolkit with nvcc; no CuPy/numba installed). The only embarrassingly parallel
+phase of the general algorithm is "one unit-capacity flow per vertex" (the
+initial certificates and the ≤ k full refreshes after terminal removals). A
+batched multi-source level-synchronous BFS kernel with per-source residual
+flags could plausibly beat the 20-core CPU version by 5–20× on that phase for
+`n ≥ 10^5`. The sequential main loop (incremental re-validation of a few
+vertices per step) is not a GPU workload. Status: idea; to be prototyped only
+if profiling (Stage G) shows the certificate phase dominating at scale.

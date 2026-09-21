@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Install package (release build)
+        run: pip install ".[dev]"
+      - name: Lint
+        run: ruff check src reference tests benchmarks scripts
+      - name: Unit, property and reference-vs-core tests
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci
+      - name: Verifier self-tests
+        run: pytest -q tests/test_verify.py tests/test_verify_review.py -n auto
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Install package with ASan/UBSan and debug assertions
+        env:
+          GLCORE_SANITIZE: "ON"
+          GLCORE_DEBUG_ASSERTS: "ON"
+        run: pip install ".[dev]"
+      - name: Core tests under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          LIBASAN=$(gcc -print-file-name=libasan.so)
+          LD_PRELOAD=$LIBASAN pytest -q -m "not slow" tests/test_core_flow.py tests/test_core_dag.py tests/test_core_matching.py tests/test_core_solver.py tests/test_core_review.py
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t glsolver:ci .
+      - name: Smoke test
+        run: docker run --rm glsolver:ci solve --help
