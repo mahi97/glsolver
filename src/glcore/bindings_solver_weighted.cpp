@@ -1,5 +1,145 @@
-// Stub; implemented in the solver stage.
+// pybind11 binding of the weighted solver: _core.solve_weighted(n, arcs, terminals, capacities, weights,
+// options) -> dict, the contract of src/glsolver/api.py (_run_core), identical in shape to solve_general.
+// run() executes with the GIL released; every std::exception raised by the core (invalid input, an invariant
+// violation reported as std::logic_error) is returned as status "error" with its message instead of
+// propagating, so the Python layer can report it and tests can assert on it.
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include <cstdint>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "bindings.hpp"
+#include "solver.hpp"
+#include "stats.hpp"
+#include "trace.hpp"
+
+namespace py = pybind11;
+
 namespace glcore {
-void bind_solver_weighted(pybind11::module_&) {}
+namespace {
+
+using ArcList = std::vector<std::pair<int, int>>;
+
+// Stats -> dict (docs/api.md `stats` field; same layout as the general / DAG bindings).
+py::dict weighted_stats_to_dict(const Stats& s) {
+    py::dict d;
+    d["max_flow_calls"] = s.max_flow_calls;
+    d["augment_calls"] = s.augment_calls;
+    d["cut_calls"] = s.cut_calls;
+    d["matching_calls"] = s.matching_calls;
+    d["min_cost_flow_calls"] = s.min_cost_flow_calls;
+    d["contractions"] = s.contractions;
+    d["deletions"] = s.deletions;
+    d["batched_deletions"] = s.batched_deletions;
+    d["cycle_shifts"] = s.cycle_shifts;
+    d["terminal_removals"] = s.terminal_removals;
+    d["roundings"] = s.roundings;
+    d["greedy_attempts"] = s.greedy_attempts;
+    d["greedy_successes"] = s.greedy_successes;
+    d["shift_calls"] = s.shift_calls;
+    d["assignment_repairs"] = s.assignment_repairs;
+    d["steps"] = s.steps;
+    py::dict times;
+    for (const auto& kv : s.time_seconds) times[py::str(kv.first)] = kv.second;
+    d["time_seconds"] = times;
+    py::list sizes;
+    for (const auto& pr : s.graph_size_over_time) sizes.append(py::make_tuple(pr.first, pr.second));
+    d["graph_size_over_time"] = sizes;
+    return d;
+}
+
+py::list weighted_trace_to_list(const Trace& tr) {
+    py::list events;
+    for (const auto& e : tr.events) events.append(py::make_tuple(e.first, e.second));
+    return events;
+}
+
+SolverOptions parse_weighted_options(const py::dict& options) {
+    SolverOptions o;
+    auto get_int = [&](const char* key, int def) -> int {
+        if (!options.contains(key)) return def;
+        return options[py::str(key)].cast<int>();
+    };
+    auto get_bool = [&](const char* key, bool def) -> bool {
+        if (!options.contains(key)) return def;
+        return options[py::str(key)].cast<bool>();
+    };
+    o.threads = get_int("threads", 0);
+    o.seed = get_int("seed", 0);
+    o.greedy_contraction = get_bool("greedy_contraction", true);
+    o.lazy_shift = get_bool("lazy_shift", true);
+    o.batch_unused_arcs = get_bool("batch_unused_arcs", true);
+    o.debug_asserts = get_bool("debug_asserts", false);
+    o.trace = get_bool("trace", false);
+    o.record_cuts = get_bool("record_cuts", false);
+    o.check_precondition = get_bool("check_precondition", true);
+    return o;
+}
+
+}  // namespace
+
+void bind_solver_weighted(py::module_& m) {
+    m.def(
+        "solve_weighted",
+        [](int n, const ArcList& arcs, const std::vector<int>& terminals, const std::vector<int64_t>& capacities,
+           const std::vector<int64_t>& weights, const py::dict& options) {
+            py::dict d;
+            d["status"] = "error";
+            d["message"] = "";
+            d["assignment"] = py::list();
+            d["parent"] = py::list();
+            d["witness"] = py::list();
+            d["k_T_connected"] = false;
+            d["stats"] = weighted_stats_to_dict(Stats{});
+            d["trace"] = py::list();
+            const SolverOptions opt = parse_weighted_options(options);
+            std::unique_ptr<GLWeightedSolver> solver;
+            try {
+                solver = std::make_unique<GLWeightedSolver>(n, arcs, terminals, capacities, weights, opt);
+            } catch (const std::exception& e) {
+                d["message"] = std::string(e.what());
+                return d;
+            }
+            SolveResult r;
+            std::string error;
+            {
+                py::gil_scoped_release release;
+                try {
+                    r = solver->run();
+                } catch (const std::exception& e) {
+                    error = e.what();
+                    if (error.empty()) error = "unknown error";
+                }
+            }
+            d["stats"] = weighted_stats_to_dict(solver->stats());
+            d["trace"] = weighted_trace_to_list(solver->trace());
+            if (!error.empty()) {
+                d["status"] = "error";
+                d["message"] = error;
+                return d;
+            }
+            d["status"] = r.status;
+            d["message"] = r.message;
+            d["assignment"] = r.assignment;
+            d["parent"] = r.parent;
+            d["witness"] = r.witness;
+            d["k_T_connected"] = r.k_T_connected;
+            return d;
+        },
+        py::arg("n"), py::arg("arcs"), py::arg("terminals"), py::arg("capacities"), py::arg("weights"),
+        py::arg("options") = py::dict(),
+        "solve_weighted(n, arcs, terminals, capacities, weights, options={}) -> dict(status, message, assignment, parent, "
+        "witness, k_T_connected, stats, trace). GLWeightedPartition [Alg 3] + RoundAndRemove [Alg 4] + MinCostSplitAssignment "
+        "[Prop 5.4] with the exact optimizations O1–O9 (docs/optimizations.md); weights[v] >= 1 for non-terminals (terminal "
+        "entries are ignored). options keys: threads, seed, greedy_contraction, lazy_shift, batch_unused_arcs, debug_asserts, "
+        "trace, record_cuts, check_precondition. status is 'ok', 'precondition_failed' (FESAC fails; a partition may still "
+        "exist) or 'error' (the C++ exception message; never raised). witness is -1 everywhere: split witnesses are in the "
+        "trace ('min_cost_split').");
+}
+
 }  // namespace glcore
