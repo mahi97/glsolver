@@ -49,15 +49,15 @@ endpoint sets coincide). Stored flows translate: a path `… → x → p → t` 
 `… → x → t` (still vertex-disjoint from the others, since only that path used
 `t`). Only flows passing through `p` are touched: `O(Σ_v [p ∈ F_v])`.
 
-## O4. Terminal removal needs only reachability, not augmentation (exact)
+## O4. Terminal removal: drop, re-augment once, recompute the cut (exact)
 
-When `t` with `c_t = 0` is removed: for `v` with `F_v` not ending at `t`, `F_v`
-is still a maximum flow in `G\t` (`κ` unchanged; `t` was not essential, and a
-maximum flow avoiding `t` exists in `G\t`), but the tightest cut, hence `Ess`,
-can change (§13.3) — recompute it by one residual reachability search
-`O(n+m)`. For `v` with a path of `F_v` ending at `t`: drop that path; the rest
-has value `κ−1 = κ_{G\t}(v)` (`t` was essential) and is maximum in `G\t`, so
-again one reachability search suffices. At most `k` removals overall.
+When `t` with `c_t = 0` is removed, for every vertex `v`: if a path of `F_v`
+ends at `t`, drop it (value `κ−1`) and run **one** augmentation in `G\t`
+(it succeeds iff `t` was *not* essential for `v`; a path ending at `t` does
+not by itself mean `t` is essential). Then recompute the tightest cut by one
+reverse reachability search — this is needed for *every* `v`, even those whose
+flow avoided `t`, because the tightest cut and hence `Ess` can change (§13.3).
+Cost `O(n(n+m))`, at most `k` times overall.
 
 ## O5. Greedy contraction attempt (exact, changes the operation order; §13.1)
 

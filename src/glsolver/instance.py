@@ -239,7 +239,6 @@ def from_networkx(
     ``node_list[i]`` is the original node label of internal vertex ``i``.
     Terminals may be given as original labels. Weights may be a dict keyed by
     node label or a sequence aligned with ``node_list``."""
-    import networkx as nx  # local import: keep this module importable without networkx
 
     if directed is None:
         directed = bool(G.is_directed())
