@@ -1,0 +1,59 @@
+{
+  "name": "connectivity_margin",
+  "description": "Connectivity exactly k (Harary) versus a growing margin: random d-regular graphs with d = 2k and d = 4k, G(n,p), dense G(n,0.8) and the complete graph, all with k terminals.",
+  "families": [
+    "harary",
+    {
+      "name": "regular_margin2",
+      "generator": "random_regular_graph",
+      "params": {
+        "d": "2*k"
+      }
+    },
+    {
+      "name": "regular_margin4",
+      "generator": "random_regular_graph",
+      "params": {
+        "d": "4*k"
+      }
+    },
+    "erdos_renyi",
+    "dense",
+    "complete"
+  ],
+  "sizes": [
+    50,
+    100,
+    200,
+    500
+  ],
+  "k": [
+    4,
+    8
+  ],
+  "modes": [
+    "balanced"
+  ],
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "variants": [
+    "plain"
+  ],
+  "algorithms": [
+    "general",
+    "weighted",
+    "reference"
+  ],
+  "algorithm_limits": {
+    "reference": {
+      "max_n": 20
+    }
+  },
+  "repeats": 3,
+  "warmup": 1,
+  "timeout": 180,
+  "threads": 1
+}

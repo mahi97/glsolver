@@ -1,0 +1,46 @@
+{
+  "name": "imbalance",
+  "description": "Capacity modes (balanced / unbalanced / random / random_positive / extreme) on three families; extreme and random produce zero-capacity terminals (paper_notes \u00a77.1 step (i)).",
+  "families": [
+    "harary",
+    "erdos_renyi",
+    "random_regular"
+  ],
+  "sizes": [
+    50,
+    200
+  ],
+  "k": [
+    4,
+    8
+  ],
+  "modes": [
+    "balanced",
+    "unbalanced",
+    "random",
+    "random_positive",
+    "extreme"
+  ],
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "variants": [
+    "plain"
+  ],
+  "algorithms": [
+    "general",
+    "weighted",
+    "reference"
+  ],
+  "algorithm_limits": {
+    "reference": {
+      "max_n": 20
+    }
+  },
+  "repeats": 3,
+  "warmup": 1,
+  "timeout": 180,
+  "threads": 1
+}

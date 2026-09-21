@@ -1,0 +1,73 @@
+{
+  "name": "weighted",
+  "description": "Weighted instances (paper \u00a75): weights in [1, w_max] for w_max in {2,4,16,64}, capacities a random composition of the total weight (+ slack); bound c_t + w_max - 1.",
+  "families": [
+    "harary",
+    "erdos_renyi",
+    "random_regular",
+    "expander"
+  ],
+  "sizes": [
+    20,
+    50,
+    100,
+    200,
+    500,
+    1000
+  ],
+  "k": [
+    4
+  ],
+  "modes": [
+    "balanced"
+  ],
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "variants": [
+    {
+      "type": "weighted",
+      "w_max": 2,
+      "slack": 0
+    },
+    {
+      "type": "weighted",
+      "w_max": 4,
+      "slack": 0
+    },
+    {
+      "type": "weighted",
+      "w_max": 16,
+      "slack": 0
+    },
+    {
+      "type": "weighted",
+      "w_max": 64,
+      "slack": 0
+    },
+    {
+      "type": "weighted",
+      "w_max": 4,
+      "slack": 50
+    }
+  ],
+  "algorithms": [
+    "weighted",
+    "reference-weighted",
+    "ilp"
+  ],
+  "algorithm_limits": {
+    "reference-weighted": {
+      "max_n": 20
+    },
+    "ilp": {
+      "max_n": 30
+    }
+  },
+  "repeats": 3,
+  "warmup": 1,
+  "timeout": 180,
+  "threads": 1
+}

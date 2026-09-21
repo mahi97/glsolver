@@ -1,0 +1,15 @@
+{
+  "name": "tmp_calib",
+  "description": "calibration only",
+  "families": ["harary", "random_regular", "erdos_renyi", "sparse_k_connected", "random_kT_dag"],
+  "sizes": [1000],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [1],
+  "variants": ["plain"],
+  "algorithms": ["general", "weighted", "dag"],
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 300,
+  "threads": 8
+}

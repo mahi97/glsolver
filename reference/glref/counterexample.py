@@ -118,7 +118,12 @@ def build_counterexample_instance(copies: int = 17) -> Instance:
     and ``"compact_vertices"`` (compact id → instance ids)."""
     ci, _names, structure = _build(copies)
     inst = ci.to_instance(name=f"gl_counterexample_copies{copies}")
-    inst.meta["structure"] = structure
+    # JSON-safe copy for instance files (pair keys "i,j"); counterexample_structure() keeps tuple keys.
+    meta_structure = dict(structure)
+    meta_structure["pair_to_pre_terminals"] = {
+        f"{i},{j}": v for (i, j), v in structure["pair_to_pre_terminals"].items()
+    }
+    inst.meta["structure"] = meta_structure
     inst.meta["copies"] = copies
     return inst
 

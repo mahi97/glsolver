@@ -142,3 +142,33 @@ flags could plausibly beat the 20-core CPU version by 5–20× on that phase for
 `n ≥ 10^5`. The sequential main loop (incremental re-validation of a few
 vertices per step) is not a GPU workload. Status: idea; to be prototyped only
 if profiling (Stage G) shows the certificate phase dominating at scale.
+
+### E2. Baseline benchmark sweep (2026-09-21 21:02–22:39, 2 894 rows, 0 invalid, 0 timeouts, 0 errors)
+
+Full data: `benchmarks/results/*.jsonl`, `summary.md`, `plots/`; methodology in docs/benchmarks.md.
+Medians over 3 seeds (1 seed at n ≥ 5 000), 8 threads, release build, k = 4:
+
+| family | n = 1 000 | n = 2 000 | n = 5 000 | n = 10 000 | slope (n ≥ 500) |
+|---|---:|---:|---:|---:|---:|
+| Harary H_{4,n} | 3.0 s | 29.6 s | — (memory) | — | **3.3** |
+| random 4-regular | 0.15 s | 0.56 s | 4.0 s | 19.8 s | 2.0 |
+| Erdős–Rényi (m ≈ n²/10) | 0.15 s | 1.4 s | 27 s | 226 s (m = 10⁷) | 3.1 in n ≈ 1.5 in m |
+| sparse k-connected (Harary + chords) | 0.20 s | 0.49 s | 2.8 s | 10.1 s | 1.7 |
+| random k-T DAG via general solver | 0.19 s | 0.62 s | 4.8 s | 19.6 s | 1.9 |
+| random k-T DAG via DAG solver | 0.6 ms | 1.3 ms | 3.7 ms | 6.6 ms | **1.02** |
+
+The pure-Python reference has slope 3.0–3.6 and needs 9–87 s at n = 100; the C++ core is 1 500–40 000× faster at n = 100.
+DAG solver: n = 10⁶, m = 5·10⁶ in 2.0–2.4 s single-threaded; **heap and linear (P1) variants are within ±10 %** at every size — the
+log factor is invisible because both are dominated by the O(n + m) CSR/topological-order construction. P1 stands as a
+theoretical improvement without practical effect at these sizes.
+
+Operation counts are linear: contractions = max-flow calls = n − k exactly; deletions ≈ 2.5 n (Harary) / 3.5 n (regular);
+cycle shifts ≈ n^1.0–1.1. The super-linear runtime is therefore *per-operation* cost. Two causes were isolated on
+Harary n = 1 000 (12 s, 7.9 GB): (1) 780 000 warm-started augmentations for 996 contractions — every deletion re-validates
+≈ 270 flows because BFS-shortest paths on a circulant graph all funnel through the arcs near the terminals; (2) 8.3 of
+12 s in `after_contraction` path translation (paths are O(n/k) long and stored as arc vectors, so locating the arc to
+splice is O(path length) per affected flow). Memory (RSS ≈ n^2.9, 56 GB at n = 2 000 seed 2) comes from the per-arc
+user index, which appends an entry for every arc of a changed flow and only compacts lazily: (#flow changes) × (path
+length) entries. Greedy contraction (O5) succeeds in 67 % of attempts at n = 100 but only 32 % at n = 10⁴ on random regular
+graphs, so the exact ShiftAssignment fallback increasingly dominates there. These three items define the optimization stage.
+

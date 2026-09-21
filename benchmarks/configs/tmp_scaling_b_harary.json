@@ -1,0 +1,59 @@
+{
+  "name": "scaling",
+  "description": "Runtime vs n on sparse k-connected families for the core solvers (general/weighted/dag); the pure-Python reference only up to n=100, brute force up to n=12 and the ILP up to n=40.",
+  "families": [
+    "harary",
+    "random_regular",
+    "erdos_renyi",
+    "sparse_k_connected",
+    "random_kT_dag"
+  ],
+  "sizes": [
+    2000
+  ],
+  "k": [
+    4
+  ],
+  "modes": [
+    "balanced"
+  ],
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "variants": [
+    "plain"
+  ],
+  "algorithms": [
+    "general",
+    "weighted",
+    "dag",
+    "reference",
+    "reference-weighted",
+    "reference-dag",
+    "bruteforce",
+    "ilp"
+  ],
+  "algorithm_limits": {
+    "reference": {
+      "max_n": 100
+    },
+    "reference-weighted": {
+      "max_n": 100
+    },
+    "reference-dag": {
+      "max_n": 10000
+    },
+    "bruteforce": {
+      "max_n": 12
+    },
+    "ilp": {
+      "max_n": 40
+    }
+  },
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 600,
+  "threads": 1
+}

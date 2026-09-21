@@ -1,0 +1,20 @@
+{
+  "name": "tmp_calib2",
+  "description": "calibration only",
+  "families": [
+    {"name": "harary", "sizes": [2000]},
+    {"name": "random_regular", "sizes": [5000]},
+    {"name": "erdos_renyi", "sizes": [5000]},
+    {"name": "sparse_k_connected", "sizes": [5000]}
+  ],
+  "sizes": [2000],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [1],
+  "variants": ["plain"],
+  "algorithms": ["general"],
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 300,
+  "threads": 8
+}
