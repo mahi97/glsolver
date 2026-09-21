@@ -506,7 +506,7 @@ of exactly the "why naive contraction/deletion fails" phenomenon.
 | Alg 4 RoundAndRemove | `weighted.round_and_remove` | same |
 | Alg 5 GLDAGPartition | `dag.gl_dag_partition` | `glcore::dag_partition` |
 | Lem 9.1 out-degree test | `dag.is_k_t_connected_dag` | same |
-| Lem A.9 compact connectivity | `compact.compact_sets`, `compact.satisfies_condition` | — |
+| Lem A.9 compact connectivity | `compact.compact_sets`, `compact.satisfies_compact_condition` | — |
 | Verifier (independent) | `glsolver.verify.verify_partition` | pure Python, no shared code |
 
 ---
