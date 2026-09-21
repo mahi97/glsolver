@@ -1,0 +1,81 @@
+{
+ "capacities": [
+  2,
+  2,
+  2
+ ],
+ "directed": true,
+ "edges": [
+  [
+   3,
+   0
+  ],
+  [
+   3,
+   1
+  ],
+  [
+   4,
+   1
+  ],
+  [
+   4,
+   3
+  ],
+  [
+   5,
+   1
+  ],
+  [
+   5,
+   6
+  ],
+  [
+   6,
+   1
+  ],
+  [
+   6,
+   2
+  ],
+  [
+   7,
+   3
+  ],
+  [
+   7,
+   4
+  ],
+  [
+   8,
+   5
+  ],
+  [
+   8,
+   6
+  ]
+ ],
+ "meta": {
+  "claims_kT_connected": false,
+  "description": "The paper's running example (Fig. 4): 3 terminals, 6 non-terminals, c=(2,2,2); shows a cycle shift, a deletion and a contraction.",
+  "expected": {
+   "contractions": 6,
+   "cycle_shifts": 2,
+   "deletions": 3,
+   "events": 30,
+   "roundings": 0,
+   "terminal_removals": 2
+  },
+  "family": "paper_running_example",
+  "seed": 0,
+  "viz_algorithm": "reference"
+ },
+ "n": 9,
+ "name": "paper_running_example",
+ "terminals": [
+  0,
+  1,
+  2
+ ],
+ "weights": null
+}

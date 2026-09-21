@@ -1,0 +1,103 @@
+{
+ "capacities": [
+  3,
+  2,
+  2
+ ],
+ "directed": false,
+ "edges": [
+  [
+   0,
+   1
+  ],
+  [
+   0,
+   5
+  ],
+  [
+   0,
+   9
+  ],
+  [
+   1,
+   2
+  ],
+  [
+   1,
+   6
+  ],
+  [
+   2,
+   3
+  ],
+  [
+   2,
+   7
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   3,
+   8
+  ],
+  [
+   4,
+   5
+  ],
+  [
+   4,
+   9
+  ],
+  [
+   5,
+   6
+  ],
+  [
+   6,
+   7
+  ],
+  [
+   6,
+   9
+  ],
+  [
+   7,
+   8
+  ],
+  [
+   8,
+   9
+  ]
+ ],
+ "meta": {
+  "chords": 1,
+  "claims_k_connected": true,
+  "connectivity_verified": true,
+  "description": "Harary H_{3,10} plus one chord (sparse_k_connected, seed 0): ShiftAssignment performs 3 cycle shifts (found by seeded search).",
+  "expected": {
+   "contractions": 7,
+   "cycle_shifts": 3,
+   "deletions": 11,
+   "events": 65,
+   "min_cycle_shifts": 3,
+   "roundings": 0,
+   "terminal_removals": 2
+  },
+  "family": "sparse_k_connected",
+  "k": 3,
+  "mode": "balanced",
+  "n": 10,
+  "seed": 0,
+  "viz_algorithm": "reference"
+ },
+ "n": 10,
+ "name": "multi_cycle_shift",
+ "terminals": [
+  0,
+  4,
+  7
+ ],
+ "weights": null
+}

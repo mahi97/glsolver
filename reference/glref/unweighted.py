@@ -96,6 +96,17 @@ def _all_essential(g: DiGraphState, stats: RefStats) -> tuple[dict[int, int], di
     return kappa, ess
 
 
+def trace_essential(tracer: Tracer, ess: dict[int, set[int]], kappa: dict[int, int]) -> None:
+    """Record an ``essential`` event (paper_notes §14) carrying the current ``Ess``/``κ``.
+
+    Emitted after the initial computation and after *every* recomputation
+    (terminal removal, arc deletion, rounding; §13.3), so that a replay of
+    the trace never needs the solver's own oracle. No-op when tracing is off.
+    """
+    if tracer.enabled:
+        tracer.record("essential", ess={v: sorted(s) for v, s in ess.items()}, kappa=dict(kappa))
+
+
 def shift_assignment(
     g: DiGraphState,
     cap: dict[int, int],
@@ -230,7 +241,7 @@ def gl_partition(
         capacities=list(inst.capacities), arcs=[list(a) for a in inst.arcs],
     )
     kappa, ess = _all_essential(g, stats)
-    tracer.record("essential", ess={v: sorted(s) for v, s in ess.items()}, kappa=dict(kappa))
+    trace_essential(tracer, ess, kappa)
     if phi is None:
         phi = find_witness(g, ess, cap)
         if phi is None:
@@ -261,6 +272,7 @@ def gl_partition(
             stats.terminal_removals += 1
             tracer.record("remove_terminal", t=t, capacities={x: cap[x] for x in g.terminals})
             kappa, ess = _all_essential(g, stats)  # §13.3: new essential terminals may appear
+            trace_essential(tracer, ess, kappa)
             if debug:
                 _check_witness(f"terminal removal of {t}")
             continue
@@ -292,6 +304,7 @@ def gl_partition(
         stats.deletions += 1
         tracer.record("delete_arc", u=e_nc[0], v=e_nc[1])
         kappa, ess = _all_essential(g, stats)
+        trace_essential(tracer, ess, kappa)
         if debug:
             _check_witness(f"deletion of {e_nc}")  # A6
 

@@ -1,0 +1,124 @@
+{
+  "name": "dag",
+  "description": "DAG solver up to n = 10^6: heap (variant 0, exactly [Alg 5]) vs linear (variant 1) and the max_residual vs round_robin active-terminal policies; reference-dag up to n = 10^5.",
+  "families": [
+    {
+      "name": "random_kT_dag",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "k": [
+        4
+      ]
+    },
+    {
+      "name": "random_kT_dag",
+      "sizes": [
+        1000,
+        10000,
+        100000
+      ],
+      "k": [
+        16
+      ]
+    },
+    {
+      "name": "layered_dag",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "k": [
+        4
+      ]
+    },
+    {
+      "name": "weighted_kT_dag",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "k": [
+        4
+      ]
+    }
+  ],
+  "sizes": [
+    1000
+  ],
+  "k": [
+    4
+  ],
+  "modes": [
+    "balanced"
+  ],
+  "seeds": [
+    1,
+    2
+  ],
+  "variants": [
+    "plain"
+  ],
+  "algorithms": [
+    "dag",
+    "reference-dag",
+    "general"
+  ],
+  "algorithm_options": {
+    "dag": [
+      {
+        "label": "heap",
+        "dag_variant": 0,
+        "dag_policy": "max_residual"
+      },
+      {
+        "label": "linear",
+        "dag_variant": 1,
+        "dag_policy": "max_residual"
+      },
+      {
+        "label": "heap-rr",
+        "dag_variant": 0,
+        "dag_policy": "round_robin"
+      },
+      {
+        "label": "linear-rr",
+        "dag_variant": 1,
+        "dag_policy": "round_robin"
+      }
+    ],
+    "reference-dag": [
+      {
+        "label": "max_residual",
+        "dag_policy": "max_residual"
+      },
+      {
+        "label": "round_robin",
+        "dag_policy": "round_robin"
+      }
+    ]
+  },
+  "algorithm_limits": {
+    "reference-dag": {
+      "max_n": 100000
+    },
+    "general": {
+      "max_n": 10000
+    }
+  },
+  "repeats": 3,
+  "warmup": 1,
+  "timeout": 1800,
+  "threads": 1,
+  "store_parts_max_n": 30
+}

@@ -1,0 +1,46 @@
+{
+ "capacities": [
+  1,
+  0,
+  1
+ ],
+ "directed": true,
+ "edges": [
+  [
+   3,
+   0
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   4,
+   1
+  ],
+  [
+   4,
+   2
+  ]
+ ],
+ "meta": {
+  "claims_kT_connected": false,
+  "family": "paper_notes_13_3",
+  "note": "v=3, x=4, t1=0, t2=1, t3=2; Ess(v)={t1}; after removing t2 (capacity 0) Ess(v)={t1,t3}",
+  "seed": 0
+ },
+ "n": 5,
+ "name": "terminal_removal_13_3",
+ "regression": {
+  "created": "2026-09-21T06:01:58.671502+00:00",
+  "expect": "ok",
+  "hash": "d630a8591e13",
+  "reason": "docs/paper_notes.md \u00a713.3: terminal removal creates new essential terminals (step (i) of [Alg 1] must recompute Ess); capacities (1,0,1) make FEAC hold"
+ },
+ "terminals": [
+  0,
+  1,
+  2
+ ],
+ "weights": null
+}

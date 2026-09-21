@@ -77,8 +77,10 @@ def assert_arborescence_certificate(inst: Instance, res: RefResult) -> None:
 def assert_trace_well_formed(inst: Instance, res: RefResult, events: list[dict[str, Any]]) -> None:
     """Event order of paper_notes §14 for [Alg 1]/[Alg 2]: init, essential, witness first;
     each matching is followed by criticality, then (reassignment_graph, cycle_shift)*
-    and exactly one delete_arc; every contract records the certificate parent and
-    decrements the target's capacity; done is last and carries the parts."""
+    and exactly one delete_arc; every delete_arc and remove_terminal is followed by an
+    essential event re-emitting Ess/κ of exactly the live non-terminals (§13.3); every
+    contract records the certificate parent and decrements the target's capacity; done
+    is last and carries the parts."""
     types = [e["type"] for e in events]
     assert types[:3] == ["init", "essential", "witness"]
     assert types[-1] == "done"
@@ -101,6 +103,7 @@ def assert_trace_well_formed(inst: Instance, res: RefResult, events: list[dict[s
 
     cap = dict(zip(inst.terminals, inst.capacities))
     live_terminals = list(inst.terminals)
+    live_nonterminals = {v for v in range(inst.n) if v not in inst.terminals}
     in_shift = False
     shifts_in_block = 0
     i = 3
@@ -141,10 +144,16 @@ def assert_trace_well_formed(inst: Instance, res: RefResult, events: list[dict[s
             i += 1
             continue
         assert not in_shift, f"{t_} inside a ShiftAssignment block"
-        if t_ == "contract":
+        if t_ == "essential":  # re-emitted right after every recomputation of Ess (§13.3, §14)
+            assert events[i - 1]["type"] in ("delete_arc", "remove_terminal"), events[i - 1]["type"]
+            assert {int(v) for v in ev["ess"]} == live_nonterminals == {int(v) for v in ev["kappa"]}
+            assert all(set(ts) <= set(live_terminals) and ts == sorted(ts) for ts in ev["ess"].values())
+        elif t_ == "contract":
             p, t, parent = ev["p"], ev["t"], ev["parent"]
             assert res.parents[p] == parent
             assert (p, parent) in set(inst.arcs)
+            assert events[i + 1]["type"] != "essential"  # contractions leave Ess unchanged (§13.2)
+            live_nonterminals.remove(p)
             cap[t] -= 1
             assert ev["capacities"] == {str(x): cap[x] for x in live_terminals}
         elif t_ == "remove_terminal":
@@ -161,6 +170,7 @@ def assert_trace_well_formed(inst: Instance, res: RefResult, events: list[dict[s
     assert types.count("matching") == res.stats.shift_calls
     assert types.count("cycle_shift") == res.stats.cycle_shifts
     assert types.count("remove_terminal") == res.stats.terminal_removals
+    assert types.count("essential") == 1 + res.stats.deletions + res.stats.terminal_removals
     assert events[-1]["parts"] == {str(t): sorted(p) for t, p in zip(inst.terminals, res.parts)}
     assert events[-1]["parents"] == {str(v): p for v, p in res.parents.items()}
 

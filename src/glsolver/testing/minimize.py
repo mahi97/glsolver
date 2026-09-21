@@ -18,28 +18,6 @@ from typing import Callable
 from glsolver.instance import Instance, make_instance
 
 
-def _rebuild(inst: Instance, arcs: list[tuple[int, int]], drop_vertices: set[int],
-             capacities: list[int], terminals: list[int]) -> Instance | None:
-    keep = [v for v in range(inst.n) if v not in drop_vertices]
-    remap = {v: i for i, v in enumerate(keep)}
-    if inst.directed:
-        edges = [(remap[u], remap[v]) for u, v in arcs if u in remap and v in remap]
-    else:
-        src = inst.undirected_edges or []
-        edges = [(remap[u], remap[v]) for u, v in src if (u, v) in set(arcs) or (v, u) in set(arcs)] if arcs is not None else []
-        if arcs is None:
-            edges = [(remap[u], remap[v]) for u, v in src if u in remap and v in remap]
-    terms = [remap[t] for t in terminals if t in remap]
-    weights = None
-    if inst.weights is not None:
-        weights = [inst.weights[v] for v in keep]
-    try:
-        return make_instance(len(keep), edges, terms, capacities, weights=weights, directed=inst.directed,
-                             name=inst.name + "_min", meta=dict(inst.meta))
-    except ValueError:
-        return None
-
-
 def minimize_instance(inst: Instance, fails: Callable[[Instance], bool], max_rounds: int = 50) -> Instance:
     """Greedy ddmin-style shrinking. ``fails`` must be True on ``inst``."""
     if not fails(inst):

@@ -1,0 +1,110 @@
+{
+ "capacities": [
+  4,
+  1,
+  2
+ ],
+ "directed": true,
+ "edges": [
+  [
+   3,
+   0
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   4,
+   1
+  ],
+  [
+   4,
+   2
+  ],
+  [
+   5,
+   1
+  ],
+  [
+   6,
+   0
+  ],
+  [
+   6,
+   2
+  ],
+  [
+   6,
+   3
+  ],
+  [
+   6,
+   4
+  ],
+  [
+   7,
+   1
+  ],
+  [
+   7,
+   4
+  ],
+  [
+   7,
+   6
+  ],
+  [
+   8,
+   2
+  ],
+  [
+   8,
+   3
+  ],
+  [
+   8,
+   4
+  ],
+  [
+   8,
+   5
+  ],
+  [
+   9,
+   2
+  ],
+  [
+   9,
+   4
+  ],
+  [
+   9,
+   8
+  ]
+ ],
+ "meta": {
+  "description": "paper_notes 13.3 gadget (3->t1, 3->4, 4->t2, 4->t3) embedded in a random digraph with c(t2)=1: after the contraction of 5 into t2 the terminal t2 has capacity 0 and is removed, and t3 becomes a NEW essential terminal of vertex 3.",
+  "expected": {
+   "contractions": 7,
+   "cycle_shifts": 0,
+   "deletions": 5,
+   "events": 35,
+   "new_essential_terminal": 2,
+   "new_essential_vertex": 3,
+   "roundings": 0,
+   "terminal_removals": 2
+  },
+  "family": "curated",
+  "seed": 139,
+  "viz_algorithm": "reference"
+ },
+ "n": 10,
+ "name": "zero_capacity_removal",
+ "terminals": [
+  0,
+  1,
+  2
+ ],
+ "weights": null
+}

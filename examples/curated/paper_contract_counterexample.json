@@ -1,0 +1,83 @@
+{
+ "capacities": [
+  2,
+  2,
+  2
+ ],
+ "directed": false,
+ "edges": [
+  [
+   0,
+   3
+  ],
+  [
+   0,
+   4
+  ],
+  [
+   1,
+   5
+  ],
+  [
+   1,
+   6
+  ],
+  [
+   2,
+   7
+  ],
+  [
+   2,
+   8
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   3,
+   8
+  ],
+  [
+   4,
+   5
+  ],
+  [
+   5,
+   6
+  ],
+  [
+   6,
+   7
+  ],
+  [
+   7,
+   8
+  ]
+ ],
+ "meta": {
+  "claims_kT_connected": true,
+  "claims_k_connected": false,
+  "connectivity_verified": true,
+  "description": "The paper's Figure 1: undirected, 3-T-connected but only 2-connected; contracting any pre-terminal breaks 3-T-connectivity, so deletions must come first.",
+  "expected": {
+   "contractions": 6,
+   "cycle_shifts": 0,
+   "deletions": 6,
+   "events": 38,
+   "roundings": 0,
+   "terminal_removals": 2
+  },
+  "family": "paper_contract_counterexample",
+  "seed": 0,
+  "viz_algorithm": "reference"
+ },
+ "n": 9,
+ "name": "paper_contract_counterexample",
+ "terminals": [
+  0,
+  1,
+  2
+ ],
+ "weights": null
+}

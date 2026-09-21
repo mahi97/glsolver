@@ -1,0 +1,78 @@
+{
+ "capacities": [
+  2,
+  2,
+  2
+ ],
+ "directed": true,
+ "edges": [
+  [
+   3,
+   0
+  ],
+  [
+   3,
+   1
+  ],
+  [
+   4,
+   1
+  ],
+  [
+   4,
+   3
+  ],
+  [
+   5,
+   1
+  ],
+  [
+   5,
+   6
+  ],
+  [
+   6,
+   1
+  ],
+  [
+   6,
+   2
+  ],
+  [
+   7,
+   3
+  ],
+  [
+   7,
+   4
+  ],
+  [
+   8,
+   5
+  ],
+  [
+   8,
+   6
+  ]
+ ],
+ "meta": {
+  "claims_kT_connected": false,
+  "family": "paper_running_example",
+  "seed": 0
+ },
+ "n": 9,
+ "name": "paper_running_example",
+ "regression": {
+  "created": "2026-09-21T06:01:58.668861+00:00",
+  "expect": "ok",
+  "hash": "30d47f2d57b4",
+  "reason": "paper's running example (docs/paper_notes.md \u00a71.2, \u00a74): FEAC holds but the graph is not 3-T-connected (v4 has out-degree 2) -- exercises Theorem 2 beyond Theorem 1",
+  "source": "glsolver.generators.paper_running_example"
+ },
+ "terminals": [
+  0,
+  1,
+  2
+ ],
+ "weights": null
+}

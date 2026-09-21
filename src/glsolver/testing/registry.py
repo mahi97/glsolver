@@ -21,8 +21,7 @@ def _make(algo: str) -> SolverFn:
 def available_solvers(include_oracles: bool = True) -> dict[str, SolverFn]:
     """Name → callable for every backend usable in this environment."""
     names = ["reference", "reference-weighted", "reference-dag"]
-    if core_available():
-        names += ["general", "weighted", "dag"]
+    names += [algo for algo in ("general", "weighted", "dag") if core_available(algo)]
     if include_oracles:
         names += ["bruteforce"]
         try:

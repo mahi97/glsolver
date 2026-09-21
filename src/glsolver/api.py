@@ -17,6 +17,7 @@ unless ``verify=False`` — the verdict of the independent verifier
 from __future__ import annotations
 
 import json
+import os
 import resource
 import time
 from dataclasses import dataclass, field
@@ -85,7 +86,15 @@ def _jsonable(x: Any) -> Any:
     return x
 
 
+#: set to ``1`` to ignore the C++ core even when it is installed (e.g. a build
+#: instrumented with a sanitizer that aborts the interpreter at import time);
+#: every ``algorithm="auto"`` call then uses the pure-Python reference solvers
+NO_CORE_ENV = "GLSOLVER_NO_CORE"
+
+
 def _core():
+    if os.environ.get(NO_CORE_ENV, "") not in ("", "0", "false", "no"):
+        return None
     try:
         from glsolver import _core  # type: ignore
 
@@ -94,9 +103,18 @@ def _core():
         return None
 
 
-def core_available() -> bool:
+_CORE_ENTRY = {"general": "solve_general", "weighted": "solve_weighted", "dag": "dag_partition"}
+
+
+def core_available(algorithm: str | None = None) -> bool:
+    """Is the C++ backend usable? With ``algorithm`` given, checks that specific binding
+    (a partially built extension must never make a backend look available)."""
     c = _core()
-    return c is not None and hasattr(c, "solve_general")
+    if c is None:
+        return False
+    if algorithm is None:
+        return all(hasattr(c, name) for name in _CORE_ENTRY.values())
+    return hasattr(c, _CORE_ENTRY[algorithm])
 
 
 def coerce_instance(
@@ -136,12 +154,11 @@ def choose_algorithm(inst: Instance, prefer_core: bool = True) -> str:
     from glsolver.preconditions import is_dag, is_k_T_connected_dag
 
     dag_ok = is_dag(inst) and is_k_T_connected_dag(inst)[0]
-    have_core = prefer_core and core_available()
     if dag_ok:
-        return "dag" if have_core else "reference-dag"
+        return "dag" if prefer_core and core_available("dag") else "reference-dag"
     if inst.is_weighted:
-        return "weighted" if have_core else "reference-weighted"
-    return "general" if have_core else "reference"
+        return "weighted" if prefer_core and core_available("weighted") else "reference-weighted"
+    return "general" if prefer_core and core_available("general") else "reference"
 
 
 def _peak_rss_mb() -> float:
@@ -323,8 +340,8 @@ def _core_options(inst: Instance, opts: dict[str, Any]) -> dict[str, Any]:
 
 def _run_core(inst: Instance, algo: str, opts: dict[str, Any]) -> GLResult:
     core = _core()
-    if core is None or not hasattr(core, "solve_general"):
-        raise RuntimeError("the C++ core is not built; use algorithm='reference*' or rebuild the package")
+    if core is None or not core_available(algo):
+        raise RuntimeError(f"the C++ backend for {algo!r} is not built; use a reference/oracle algorithm or rebuild")
     arcs = [list(a) for a in inst.arcs]
     caps = [int(c) for c in inst.capacities]
     w = [int(x) for x in inst.weights] if inst.weights is not None else [1] * inst.n

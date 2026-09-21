@@ -25,7 +25,7 @@ from .graph import DiGraphState
 from .matching import minimal_hall_deficient_set_counted, saturating_matching
 from .mincostflow import MinCostFlow
 from .trace import Tracer
-from .unweighted import InvariantError, RefResult, RefStats
+from .unweighted import InvariantError, RefResult, RefStats, trace_essential
 
 CostFn = Callable[[int, int], int]
 SplitAssignment = dict[tuple[int, int], int]
@@ -328,7 +328,7 @@ def gl_weighted_partition(
         weights=[0 if v in tset else w[v] for v in range(inst.n)],
     )
     kappa, ess = _all_essential(g, stats)
-    tracer.record("essential", ess={v: sorted(s) for v, s in ess.items()}, kappa=dict(kappa))
+    trace_essential(tracer, ess, kappa)
 
     # precondition: FESAC via a zero-cost min-cost flow [Def 5.3, Prop 5.4]
     psi = _split_assignment(g, ess, cap, w, zero_cost, stats)
@@ -355,6 +355,7 @@ def gl_weighted_partition(
             stats.terminal_removals += 1
             tracer.record("remove_terminal", t=t, capacities={x: cap[x] for x in g.terminals})
             kappa, ess = _all_essential(g, stats)  # §13.3: new essential terminals may appear
+            trace_essential(tracer, ess, kappa)
             if debug:
                 _check_fesac(f"terminal removal of {t}")
             continue
@@ -434,6 +435,7 @@ def gl_weighted_partition(
             stats.deletions += 1
             tracer.record("delete_arc", u=e_nc[0], v=e_nc[1])
             kappa, ess = _all_essential(g, stats)
+            trace_essential(tracer, ess, kappa)
             if debug:  # the same psi witnesses FESAC in G \ e_nc [Lem 8.5]
                 ok, why = is_split_witness(g, psi, ess, cap, w)
                 if not ok:
@@ -449,6 +451,7 @@ def gl_weighted_partition(
                     ess.pop(v, None)
                     kappa.pop(v, None)
         kappa, ess = _all_essential(g, stats)
+        trace_essential(tracer, ess, kappa)
         if debug:
             _check_fesac(f"rounding of S = {sorted(rounded)}")
 

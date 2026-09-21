@@ -1,0 +1,98 @@
+{
+ "capacities": [
+  4,
+  1,
+  4
+ ],
+ "directed": false,
+ "edges": [
+  [
+   0,
+   1
+  ],
+  [
+   0,
+   4
+  ],
+  [
+   0,
+   7
+  ],
+  [
+   1,
+   2
+  ],
+  [
+   1,
+   5
+  ],
+  [
+   2,
+   3
+  ],
+  [
+   2,
+   6
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   3,
+   7
+  ],
+  [
+   4,
+   5
+  ],
+  [
+   5,
+   6
+  ],
+  [
+   6,
+   7
+  ]
+ ],
+ "meta": {
+  "base_family": "harary",
+  "claims_k_connected": true,
+  "connectivity_verified": true,
+  "description": "Weighted variant of Harary H_{3,8} (weights in [1,2], seed 0): the weighted algorithm ends with a RoundAndRemove step (rounding), a min-cost split assignment psi is recomputed at every deletion.",
+  "expected": {
+   "contractions": 3,
+   "cycle_shifts": 0,
+   "deletions": 7,
+   "events": 44,
+   "min_roundings": 1,
+   "roundings": 1,
+   "terminal_removals": 0
+  },
+  "family": "weighted_variant",
+  "k": 3,
+  "mode": "balanced",
+  "n": 8,
+  "seed": 0,
+  "slack": 0,
+  "viz_algorithm": "reference-weighted",
+  "w_max": 2
+ },
+ "n": 8,
+ "name": "weighted_rounding",
+ "terminals": [
+  3,
+  6,
+  7
+ ],
+ "weights": [
+  2,
+  2,
+  1,
+  0,
+  2,
+  2,
+  0,
+  0
+ ]
+}

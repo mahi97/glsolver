@@ -1,0 +1,126 @@
+{
+ "capacities": [
+  2,
+  3,
+  2
+ ],
+ "directed": true,
+ "edges": [
+  [
+   0,
+   1
+  ],
+  [
+   0,
+   2
+  ],
+  [
+   0,
+   4
+  ],
+  [
+   3,
+   2
+  ],
+  [
+   3,
+   5
+  ],
+  [
+   3,
+   6
+  ],
+  [
+   5,
+   0
+  ],
+  [
+   5,
+   1
+  ],
+  [
+   5,
+   7
+  ],
+  [
+   6,
+   0
+  ],
+  [
+   6,
+   2
+  ],
+  [
+   6,
+   4
+  ],
+  [
+   7,
+   0
+  ],
+  [
+   7,
+   1
+  ],
+  [
+   7,
+   4
+  ],
+  [
+   8,
+   0
+  ],
+  [
+   8,
+   4
+  ],
+  [
+   8,
+   6
+  ],
+  [
+   9,
+   4
+  ],
+  [
+   9,
+   5
+  ],
+  [
+   9,
+   8
+  ]
+ ],
+ "meta": {
+  "claims_kT_connected": true,
+  "connectivity_verified": true,
+  "dag": true,
+  "description": "Random 3-T-connected DAG on 10 vertices (seed 1): GLDAGPartition contracts the earliest pre-terminal of the active terminal (dag_contract events), no flows needed.",
+  "expected": {
+   "contractions": 7,
+   "cycle_shifts": 0,
+   "dag": true,
+   "deletions": 0,
+   "events": 9,
+   "roundings": 0,
+   "terminal_removals": 0
+  },
+  "extra_out": 0,
+  "family": "random_kT_dag",
+  "k": 3,
+  "mode": "balanced",
+  "n": 10,
+  "seed": 1,
+  "viz_algorithm": "reference-dag",
+  "w_max": 1,
+  "weighted": false
+ },
+ "n": 10,
+ "name": "small_dag",
+ "terminals": [
+  1,
+  2,
+  4
+ ],
+ "weights": null
+}

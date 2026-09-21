@@ -1,0 +1,128 @@
+{
+ "capacities": [
+  1,
+  3,
+  2
+ ],
+ "directed": true,
+ "edges": [
+  [
+   3,
+   0
+  ],
+  [
+   3,
+   1
+  ],
+  [
+   3,
+   2
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   3,
+   7
+  ],
+  [
+   4,
+   2
+  ],
+  [
+   4,
+   5
+  ],
+  [
+   5,
+   1
+  ],
+  [
+   5,
+   2
+  ],
+  [
+   5,
+   6
+  ],
+  [
+   5,
+   8
+  ],
+  [
+   6,
+   0
+  ],
+  [
+   6,
+   1
+  ],
+  [
+   6,
+   4
+  ],
+  [
+   7,
+   0
+  ],
+  [
+   7,
+   1
+  ],
+  [
+   7,
+   4
+  ],
+  [
+   7,
+   5
+  ],
+  [
+   7,
+   6
+  ],
+  [
+   8,
+   0
+  ],
+  [
+   8,
+   3
+  ],
+  [
+   8,
+   4
+  ],
+  [
+   8,
+   5
+  ],
+  [
+   8,
+   6
+  ]
+ ],
+ "meta": {
+  "attempt": 54,
+  "claims_kT_connected": false,
+  "family": "feac_only_random",
+  "p": 0.452,
+  "seed": 1337
+ },
+ "n": 9,
+ "name": "feac_only_random_n9_k3",
+ "regression": {
+  "created": "2026-09-21T06:01:58.845812+00:00",
+  "expect": "ok",
+  "hash": "95696e9f9641",
+  "reason": "random FEAC-only digraph (seed 1337, attempt 54): FEAC witness exists but \u03ba(v) < k for vertex 4",
+  "violating_vertex": 4
+ },
+ "terminals": [
+  0,
+  2,
+  1
+ ],
+ "weights": null
+}

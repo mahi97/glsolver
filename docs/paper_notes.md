@@ -607,3 +607,8 @@ with the *full* state needed to replay the algorithm on small graphs:
 
 Every event may carry `"cuts": {v: {"L":[..],"S":[..],"R":[..]}}` when the
 tracer is asked to record tightest cuts.
+
+`essential` is emitted after the initial computation **and after every
+recomputation** of `Ess`/`κ` (following `remove_terminal`, `delete_arc` and
+`round_and_remove`; §13.3), so a replay of the trace never needs the solver's
+own oracle — a contraction leaves `Ess` unchanged (§13.2) and emits none.

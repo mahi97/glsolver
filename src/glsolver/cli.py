@@ -288,7 +288,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     z = sub.add_parser("visualize", help="render the algorithm's execution")
     z.add_argument("instance")
-    z.add_argument("--algorithm", default="reference")
+    z.add_argument("--algorithm", default=None,
+                   help="trace-emitting backend (default: the instance's meta['viz_algorithm'], else 'reference')")
     z.add_argument("--format", default="svg", choices=["svg", "png", "pdf", "html", "gif", "mp4"])
     z.add_argument("--layout", default="auto")
     z.add_argument("--step", type=int, default=None, help="render only this event index")

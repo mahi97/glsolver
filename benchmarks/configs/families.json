@@ -1,0 +1,91 @@
+{
+  "name": "families",
+  "description": "Every generator family at n=200 for k in {2,4,8,16} (families that cannot realise a k are skipped), plus the paper examples and the official counterexample (1 and 17 copies).",
+  "families": [
+    "complete",
+    "cycle",
+    "wheel",
+    "grid",
+    "grid3d",
+    "harary",
+    "random_regular",
+    "erdos_renyi",
+    "random_geometric",
+    "expander",
+    "dense",
+    "sparse_k_connected",
+    "adversarial_ladder",
+    "random_kT_dag",
+    "layered_dag",
+    "weighted_kT_dag",
+    "directed_random",
+    {
+      "name": "random_kT_digraph",
+      "sizes": [
+        60
+      ]
+    },
+    "paper_running_example",
+    "paper_contract_counterexample",
+    "paper_essential_example",
+    {
+      "name": "counterexample",
+      "copies": 1
+    },
+    {
+      "name": "counterexample",
+      "copies": 17
+    }
+  ],
+  "sizes": [
+    200
+  ],
+  "k": [
+    2,
+    4,
+    8,
+    16
+  ],
+  "modes": [
+    "balanced"
+  ],
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "variants": [
+    "plain"
+  ],
+  "algorithms": [
+    "general",
+    "weighted",
+    "dag",
+    "reference",
+    "reference-weighted",
+    "reference-dag",
+    "bruteforce",
+    "ilp"
+  ],
+  "algorithm_limits": {
+    "reference": {
+      "max_n": 100
+    },
+    "reference-weighted": {
+      "max_n": 100
+    },
+    "reference-dag": {
+      "max_n": 1000
+    },
+    "bruteforce": {
+      "max_n": 12
+    },
+    "ilp": {
+      "max_n": 40
+    }
+  },
+  "repeats": 3,
+  "warmup": 1,
+  "timeout": 600,
+  "threads": 1
+}

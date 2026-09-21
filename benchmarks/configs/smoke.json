@@ -1,0 +1,20 @@
+{
+  "name": "smoke",
+  "description": "Tiny sanity grid: pure-Python reference solvers plus the exact oracles on n <= 20. Must finish in under a minute.",
+  "families": ["harary", "erdos_renyi", "random_kT_dag", "paper_running_example", "paper_essential_example"],
+  "sizes": [10, 20],
+  "k": [2, 3],
+  "modes": ["balanced"],
+  "seeds": [1],
+  "variants": ["plain"],
+  "algorithms": ["reference", "reference-dag", "reference-weighted", "bruteforce", "ilp"],
+  "algorithm_limits": {
+    "bruteforce": {"max_n": 12},
+    "ilp": {"max_n": 20},
+    "reference-weighted": {"max_n": 10}
+  },
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 20,
+  "threads": 1
+}
