@@ -12,7 +12,9 @@ dist/
 .hypothesis/
 .mypy_cache/
 .ruff_cache/
-benchmarks/results/*
+benchmarks/results/dashboard.html
+benchmarks/results/**/*.html
+benchmarks/results/*.tmp
 /CMakeCache.txt
 /CMakeFiles/
 _skbuild/
@@ -20,6 +22,4 @@ _skbuild/
 *.mp4
 /tmp/
 benchmarks/instances/
-!benchmarks/results/sample_smoke.jsonl
-!benchmarks/results/.gitkeep
 tests/.exhaustive_tally.json

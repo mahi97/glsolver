@@ -280,10 +280,15 @@ print(json.dumps(s))
     assert proc.returncode == 0, proc.stderr
     assert "imported glsolver._core in-process" not in proc.stderr
     summary = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert summary["rows"] == 1 and summary["ok"] == 1
-    (row,) = runner.load_results([tmp_path / "trap.jsonl"])
-    assert row["machine"]["core"]["probe"] == "subprocess"
-    assert isinstance(row["machine"]["core"]["available"], bool)
+    rows = runner.load_results([tmp_path / "trap.jsonl"])
+    # 'reference' always runs; 'general' runs too when the C++ core is usable (probed in a subprocess).
+    core_ok = rows[0]["machine"]["core"]["available"]
+    expected = 2 if core_ok else 1
+    assert summary["rows"] == expected and summary["ok"] == expected, summary
+    assert len(rows) == expected
+    for row in rows:
+        assert row["machine"]["core"]["probe"] == "subprocess"
+        assert isinstance(row["machine"]["core"]["available"], bool)
 
 
 # ---------------------------------------------------------------------------
@@ -584,11 +589,15 @@ def test_results_dir_is_gitignored_except_the_sample():
         res = subprocess.run(["git", "-C", str(REPO_ROOT), "check-ignore", "-q", rel], capture_output=True, timeout=20)
         return res.returncode == 0
 
-    for rel in ("benchmarks/results/dashboard.html", "benchmarks/results/summary.md", "benchmarks/results/smoke.jsonl",
-                "benchmarks/results/plots/runtime_vs_n_all.png", "benchmarks/results/exhaustive_x.json"):
+    # Policy: raw rows (*.jsonl), summary.md, plots and exhaustive tallies are tracked (they are the
+    # machine-readable evidence behind docs/benchmarks.md); the regenerable dashboard and the instance
+    # cache are not.
+    for rel in ("benchmarks/results/dashboard.html", "benchmarks/results/other.html", "benchmarks/instances/x.json"):
         assert ignored(rel), rel
-    assert not ignored("benchmarks/results/sample_smoke.jsonl")
-    assert not ignored("benchmarks/runner.py")
+    for rel in ("benchmarks/results/sample_smoke.jsonl", "benchmarks/results/summary.md",
+                "benchmarks/results/plots/runtime_vs_n_all.png", "benchmarks/results/exhaustive_x.json",
+                "benchmarks/runner.py"):
+        assert not ignored(rel), rel
 
 
 def test_cli_survives_a_core_whose_import_aborts(tmp_path):
