@@ -1,0 +1,58 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "glsolver"
+version = "0.1.0"
+description = "Exact polynomial-time Győri–Lovász partitioning (arXiv 2608.30945): general, directed, weighted and DAG solvers with independent verification."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "glsolver contributors"}]
+dependencies = [
+    "numpy>=1.24",
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+ilp = ["scipy>=1.11", "highspy>=1.7"]
+viz = ["matplotlib>=3.7", "pillow>=10", "imageio>=2.31"]
+bench = ["psutil>=5.9", "scipy>=1.11", "matplotlib>=3.7", "tqdm>=4.65"]
+test = ["pytest>=7", "pytest-xdist>=3", "hypothesis>=6.80", "scipy>=1.11", "highspy>=1.7"]
+dev = ["ruff>=0.4", "mypy>=1.8", "pytest>=7", "pytest-xdist>=3", "hypothesis>=6.80", "scipy>=1.11", "highspy>=1.7", "matplotlib>=3.7", "pillow>=10", "imageio>=2.31", "psutil>=5.9", "tqdm>=4.65"]
+
+[project.scripts]
+glsolve = "glsolver.cli:main"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.20"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/glsolver", "reference/glref"]
+sdist.exclude = [".research", ".remember", "benchmarks/results"]
+
+[tool.scikit-build.cmake.define]
+GLCORE_SANITIZE = {env="GLCORE_SANITIZE", default="OFF"}
+GLCORE_DEBUG_ASSERTS = {env="GLCORE_DEBUG_ASSERTS", default="OFF"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "slow: long-running tests (deselect with -m 'not slow')",
+    "ilp: tests requiring an ILP solver",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "reference", "tests", "benchmarks", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+ignore = ["E501", "B905", "UP007", "UP006", "UP035", "B006", "B008", "B007"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
