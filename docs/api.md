@@ -33,7 +33,7 @@ partition(G, terminals, sizes=..., **kw)   # thin alias: classical undirected GL
 | `valid` | `True/False` from the independent verifier, `None` if `verify=False` |
 | `verification` | full `VerificationReport` |
 | `runtime` | wall-clock seconds of the solve (excluding verification) |
-| `stats` | dict of counters/timings: `max_flow_calls`, `min_cut_calls`, `matching_calls`, `min_cost_flow_calls`, `contractions`, `deletions`, `cycle_shifts`, `terminal_removals`, `roundings`, `assignment_repairs`, `time_*`, `peak_rss_mb`, `graph_size_over_time` |
+| `stats` | dict of counters/timings: `max_flow_calls`, `min_cut_calls`, `matching_calls`, `min_cost_flow_calls`, `contractions`, `deletions`, `cycle_shifts`, `terminal_removals`, `roundings`, `assignment_repairs`, `time_*`, `peak_rss_mb`, `graph_size_over_time`; reference solvers also report `debug_max_flow_calls`, `debug_min_cost_flow_calls`, `time_debug_checks` (work done only by `debug=True` invariant checks, kept separate so counters are comparable across modes) |
 | `certificate` | `{"parents": {v: parent_v}}` in-arborescence per part (original arcs), plus `"witness"` for the final witness when available |
 | `trace` | list of trace events (docs/paper_notes.md §14) or `None` |
 | `instance` | the normalized `Instance` |
