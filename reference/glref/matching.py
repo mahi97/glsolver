@@ -48,6 +48,36 @@ def saturating_matching(g: DiGraphState, S: Sequence[int] | None = None) -> dict
     return m
 
 
+def minimal_hall_deficient_set_counted(g: DiGraphState) -> tuple[list[int] | None, int]:
+    """:func:`minimal_hall_deficient_set` together with the number of
+    ``saturating_matching`` tests it performed, so that callers can account for
+    the work in their statistics (``RefStats.matching_calls``).
+
+    Returns ``(S, tests)``. One test decides whether ``T`` itself is saturable;
+    afterwards each scan performs at most ``|S|`` tests and there are at most
+    ``|T|`` scans, so ``tests ≤ |T|^2 + 1`` (the paper's "at most ``|T|^2``
+    matching tests", paper_notes §8).
+    """
+    S = list(g.terminals)
+    tests = 1
+    if saturating_matching(g, S) is not None:
+        return None, tests
+    changed = True
+    while changed:
+        changed = False
+        for t in list(S):
+            S2 = [x for x in S if x != t]
+            tests += 1
+            if saturating_matching(g, S2) is None:
+                S = S2
+                changed = True
+                break
+    assert S, "the empty set is always saturable"
+    pt = g.pre_terminals(S)
+    assert len(pt) == len(S) - 1, "[Lem 7.6] |PT(G,S)| = |S| - 1"
+    return S, tests
+
+
 def minimal_hall_deficient_set(g: DiGraphState) -> list[int] | None:
     """An inclusion-minimal nonempty ``S ⊆ T`` with no matching saturating ``S``
     (equivalently inclusion-minimal with ``|S| > |PT(G,S)|``, [Lem 7.6]).
@@ -56,20 +86,6 @@ def minimal_hall_deficient_set(g: DiGraphState) -> list[int] | None:
     ``S = T``; repeatedly drop any terminal ``t`` such that ``S \\ {t}`` still has no
     saturating matching, restarting the scan after each removal; stop when every
     ``S \\ {t}`` is saturable. Returns ``None`` if ``T`` itself is saturable.
+    :func:`minimal_hall_deficient_set_counted` also reports the number of tests.
     """
-    S = list(g.terminals)
-    if saturating_matching(g, S) is not None:
-        return None
-    changed = True
-    while changed:
-        changed = False
-        for t in list(S):
-            S2 = [x for x in S if x != t]
-            if saturating_matching(g, S2) is None:
-                S = S2
-                changed = True
-                break
-    assert S, "the empty set is always saturable"
-    pt = g.pre_terminals(S)
-    assert len(pt) == len(S) - 1, "[Lem 7.6] |PT(G,S)| = |S| - 1"
-    return S
+    return minimal_hall_deficient_set_counted(g)[0]

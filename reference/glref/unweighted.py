@@ -41,6 +41,12 @@ class RefStats:
     heap_pushes: int = 0
     heap_pops: int = 0
     stale_pops: int = 0
+    # debug-only re-verification work (FESAC re-tests, the A7 essential-set
+    # comparison), booked apart from the algorithmic counters above so that
+    # those do not depend on ``debug``
+    debug_max_flow_calls: int = 0
+    debug_min_cost_flow_calls: int = 0
+    time_debug_checks: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +67,9 @@ class RefStats:
             "heap_pushes": self.heap_pushes,
             "heap_pops": self.heap_pops,
             "stale_pops": self.stale_pops,
+            "debug_max_flow_calls": self.debug_max_flow_calls,
+            "debug_min_cost_flow_calls": self.debug_min_cost_flow_calls,
+            "time_debug_checks": self.time_debug_checks,
         }
 
 

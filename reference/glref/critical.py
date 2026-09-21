@@ -42,7 +42,6 @@ def criticality_table(
         for v in g.nonterminals():
             ess_after = essential_terminals(h, v)[1]
             row[v] = ess[v] - ess_after
-            assert ess_after <= ess[v] or True  # new essentials may appear only if κ drops; not needed here
         table.append(row)
     return table
 
