@@ -10,12 +10,16 @@ result = glpartition(
     sizes=None,                 # classical convention n_i (unweighted only); exactly one of capacities/sizes
     weights=None,               # None | sequence | dict for weighted instances
     directed=None,              # None → inferred from the graph type
-    algorithm="auto",           # "auto" | "general" | "weighted" | "dag" | "reference" | "reference-weighted" | "bruteforce" | "ilp"
+    algorithm="auto",           # "auto" | "general" | "weighted" | "dag" | "reference" | "reference-weighted" | "reference-dag" | "bruteforce" | "ilp"
     verify=True,                # run the independent verifier on the output
-    verify_preconditions="auto",# False | True | "auto": check k-T-connectivity / FEAC before solving
+    verify_preconditions="auto",# False | True | "auto": NetworkX cross-check before solving (auto: oracles only, n <= 400)
     trace=False,                # record the step-by-step trace for visualization
     seed=0,                     # tie-breaking seed for heuristic choices (determinism)
+    threads=0,                  # C++ core worker threads (0 = min(hardware, 16))
     time_limit=None,            # seconds, only honoured by oracles
+    debug=False,                # enable the paper's invariant assertions (A1–A8 / FESAC / DAG) — slow
+    options=None,               # backend options: greedy_contraction, lazy_shift, batch_unused_arcs, record_cuts, dag_policy, dag_variant
+    name="",                    # instance name recorded in results
 )
 
 partition(G, terminals, sizes=..., **kw)   # thin alias: classical undirected GL

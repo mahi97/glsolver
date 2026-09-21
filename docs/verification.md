@@ -409,3 +409,125 @@ Test counts (`GLSOLVER_NO_CORE=1`, C++ core not registered):
 pairs and the three core-vs-reference tests) in 20 s;
 `tests/test_edge_cases.py` + `tests/test_regression_store.py` +
 `tests/test_api_cli.py` 71 passed, 2 skipped (slow / core counterexample).
+
+## 10. Results (whole project, C++ core built)
+
+The counts of §9 were taken with the C++ core absent.  This section records
+the state of the project once the core is built and registered, i.e. with the
+backends `reference`, `reference-weighted`, `reference-dag`, `general`,
+`weighted`, `dag`, `bruteforce` and `ilp` all available.
+
+**Test suite.**  2 469 tests across 31 suites pass (pytest; Hypothesis at the
+`ci`, `dev` and `thorough` profiles).  Every theorem solver runs with
+`debug=True` — the reference checks the paper's invariants A1–A8 (§7.2), the
+C++ backends their own `debug_asserts` — and every call runs under the time
+bound of §4.2.
+
+### 10.1 Exhaustive enumerations
+
+Both C++ solvers were run, with debug assertions, over the full enumerations of
+§4 in addition to the reference solvers.  **No failure of any kind** (invalid
+partition, wrong status, crash, invariant violation, timeout) was observed.
+
+| enumeration | instances | solver runs | failures |
+|---|---|---|---|
+| undirected, every connected graph on `n ≤ 7` | **145 400** (`n ≤ 6`: 9 061, of which `n = 6`: 8 272; `n = 7`: 136 339) | `general` 145 400, `weighted` 145 400, `dag` 119 (`n ≤ 6`) | 0 |
+| directed, every digraph on `n ≤ 4`, `k ∈ {1, 2}` | **3 278** (FEAC 1 760, of which `k`-`T`-connected 1 502; non-FEAC 1 518) | `general` 3 278, `weighted` 3 278, `dag` 1 508 | 0 |
+
+The enumerations are the ones of §4, driven offline by `scripts/run_exhaustive.py`
+with 16 processes: the `n ≤ 6` run (9 061 undirected + 3 278 directed) takes
+1.1 s, the `n = 7` layer (136 339 undirected) 17.5 s.  Both tallies are stored,
+under `benchmarks/results/exhaustive_core_n6.json` and `exhaustive_core_n7.json`.
+On the FEAC instances every applicable backend returns a valid partition; on the
+1 518 non-FEAC digraphs every theorem solver returns `precondition_failed`
+(never `infeasible`, never a crash), and the brute force run of §9 confirms that
+48 of them nevertheless admit a partition — the theorem is sufficient, not
+necessary.
+
+### 10.2 The official counterexample
+
+The appendix's compact-connectivity counterexample (§10) is reproduced exactly
+for `copies = 1`, `2` and `17`; the generated instances match the authors'
+construction and the claims of their script (compact connectivity holds, every
+arc deletion breaks it, every pre-terminal contraction breaks it) are
+re-checked by `glref.counterexample.check_counterexample_claims`.
+
+| instance | `n` / `m` / `k` | result |
+|---|---|---|
+| 1 copy, `algorithm="reference"` | 333 / 2 160 / 9 | valid partition after 900 s of pure Python (§9) |
+| 17 copies, C++ `general` | 3 789 / 33 264 / 9 | valid partition in 1.8 s |
+| 17 copies, C++ `weighted` | 3 789 / 33 264 / 9 | valid partition in 1.4 s |
+
+This is the instance the FEAC machinery was invented to survive: compact
+connectivity is maintained by *no* single operation, while FEAC is, so a solver
+that contracts or deletes greedily without re-establishing the condition fails
+here and nowhere else in the suite.
+
+### 10.3 Differential fuzzing of the C++ core
+
+`tests/test_core_review.py` (primitives) and `tests/test_core_solver_review.py`
+(solvers) push seeded random instances through the core and compare with the
+validated reference `glref` and the independent verifier.  All randomness is
+seeded and every assertion names the seed of the failing case, so any failure
+is reproducible from the test id.
+
+* **Primitives — about 4 400 instances** (`n` 3..15, `k` 1..5, directed and
+  undirected, including the degenerate shapes: `k = 1`, `k = n − 1`, isolated
+  vertices, vertices with no path to `T`, terminals without in-arcs, raw arc
+  lists with self-loops / parallel arcs / arcs leaving terminals).  Checked:
+  `tightest_cut` [Prop 4.2] — `κ`, the `L`/`S`/`R` sides and `Ess`
+  **identical** to `glref.flow.tightest_min_cut`, returned paths a valid family
+  [Def 3.2]; `Graph` mutations [Def 2.1] arc-for-arc identical to
+  `glref.graph.DiGraphState` after random operation sequences, `orig_head`
+  parents included (§13.4); the `EssentialOracle` after random operation
+  sequences (O1–O4, P2) — `κ` always exact, the stored `Ess` a certified subset
+  and exactly the reference's whenever the oracle claims an exact cut;
+  `evaluate_deletion` (O2/O5) against `glref.critical.is_critical` for every
+  `(v, t)` and against the reference on `G \ D` for arc sets; matching
+  [Lem 7.8] and the minimal Hall-deficient set [Lem 7.6]; min-cost flow
+  [Prop 5.4] on networks with small and with `2^40`-sized capacities and costs
+  (int64 overflow reported, never wrapped); `dag_partition` [Alg 5] in both
+  variants and all three policies; and bit-identical results at `threads=8`
+  versus `threads=1`.
+* **Solvers — about 6 000 instances** (`n` 3..14, `k` 1..5: undirected
+  `k`-connected, directed `k`-`T`-connected, FEAC-only confirmed with
+  `check_preconditions`, DAGs, arbitrary digraphs, weighted variants;
+  capacities balanced / unbalanced / random / with zeros / all-in-one) through
+  `algorithm="general"` and `"weighted"` with **every** combination of
+  `greedy_contraction`, `lazy_shift`, `batch_unused_arcs` and `debug_asserts`.
+  Every partition is accepted by the independent verifier and its
+  in-arborescence certificate checked against the **original** arcs; statuses
+  agree with the literal reference solvers and, for `n ≤ 8`, with the brute
+  force (the core never answers `precondition_failed` where the reference
+  answers `ok` or vice versa; the core never returns `error`).
+* **Trace replay.**  Instances on which the greedy (O5) or batched (O1) paths
+  fired are re-solved with them off, and every trace is replayed with the exact
+  reference primitives: after each delete / contract / remove / shift event the
+  witness `φ` carried by the trace satisfies `φ(v) ∈ Ess_G(v)` with **exact**
+  essential sets and exact capacity counts, independently of the core's
+  certified subsets (`RESEARCH_NOTES.md` P2); weighted traces are checked for
+  FESAC feasibility with `glref.weighted.min_cost_split_assignment`.
+* **Degenerate and adversarial inputs**: `k == n`, `k == 1`, `n == 1`,
+  single-capacity vectors, isolated vertices, terminals without in-arcs, raw
+  arc lists fed straight into `_core`, huge weights, `k > 64`, random junk,
+  vertex-relabelling invariance, and thread determinism at `threads=16`.
+* **Watch-list checks** for the failure modes a review of this code flagged:
+  terminal index versus vertex id confusion, a stale `φ` after terminal
+  removal, capacity off-by-one, a secondary arc equal to its matching arc,
+  cycle detection at `k = 1` (no shift can happen, [Lem 7.10]) and `k = 2`
+  (every cycle has length 2), and rounding parents being original arcs.
+
+Two bugs found this way are kept as named regression tests: an
+`EssentialOracle::after_contraction` that kept serving stale "exact" cuts after
+contracting a pre-terminal of out-degree ≥ 2 (fixed by advancing the exact-cut
+epoch), and a greedy-contraction case found by fuzzing a random digraph
+(`n = 28`, `k = 6`, unbalanced capacities).
+
+### 10.4 Sanitizers
+
+The core builds cleanly with `GLCORE_SANITIZE=ON` **and**
+`GLCORE_DEBUG_ASSERTS=ON`, and the core test files run under ASan/UBSan with
+no report (`ASAN_OPTIONS=detect_leaks=0`, both `libasan` and `libstdc++`
+preloaded — see `docs/implementation.md` for why both are needed).  This is the
+`sanitizers` job of `.github/workflows/ci.yml`; it is roughly 20x slower than
+the release build, which is why it runs only the `tests/test_core_*.py` files.

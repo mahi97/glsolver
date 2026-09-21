@@ -39,12 +39,14 @@ regression/             permanently stored regression instances (JSON)
 ## Dispatcher (`algorithm="auto"`)
 
 ```
-weighted instance & DAG & out-degree ≥ k  → dag
-unweighted & DAG & out-degree ≥ k          → dag
-weighted (general)                          → weighted core
-unweighted, n ≤ 7 and k ≤ 3 (optional)      → general core (brute force only if requested)
-otherwise                                   → general core (falls back to weighted core on unit weights if requested)
+DAG and every non-terminal has out-degree ≥ k   → dag        (C++; reference-dag if the binding is missing)
+weighted instance                               → weighted   (C++; reference-weighted if missing)
+otherwise                                       → general    (C++; reference if missing)
 ```
+
+Backend availability is checked per binding (`core_available("general" | "weighted" | "dag")`),
+so a partially built extension never makes a backend look available. The oracles
+(`bruteforce`, `ilp`) and the pure-Python solvers are only used when named explicitly.
 
 ## Determinism
 
