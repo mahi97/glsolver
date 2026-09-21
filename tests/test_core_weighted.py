@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import random
 import time
 from typing import Any
@@ -684,6 +685,7 @@ def test_scaling_smoke(label: str, builder) -> None:
     assert dt < 120.0, dt
 
 
+@pytest.mark.skipif("asan" in os.environ.get("LD_PRELOAD", ""), reason="wall-clock bound is meaningless under sanitizers")
 def test_medium_scaling_fast() -> None:
     """A medium instance in the default test run: unit and weighted, with the arborescence checked."""
     base = generators.harary_graph(300, 6, seed=2)
