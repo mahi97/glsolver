@@ -21,14 +21,17 @@
 //         sends weight into the deficient set S; [Lem 8.7]: essentiality survives the removal).
 // With opt.lazy_shift = false step (iii) always recomputes psi by the min-cost flow (the literal [Alg 3]).
 //
-// Certified-subset discipline (RESEARCH_NOTES.md P2): oracle_.ess(v) is a subset of the true Ess_G(v) that always
-// contains every t with psi(v,t) > 0 (initial psi over exact sets; a deletion keeps the set of an unaffected or
-// kappa-restored vertex and installs the exact set of a kappa-dropped one, which contains t when the deletion is
-// non-critical for (v,t); terminal removal and rounding recompute exact sets ⊇ old \ removed; contraction keeps
-// them). Criticality of e for such a pair is decided with the exact cut of G \ e (O2). The min-cost flow of step
-// (iii) is first solved over the stored subsets; if it is infeasible or yields no non-critical secondary arc (both
-// impossible over the exact sets, [Lem 8.5] / [Lem 8.4]) every cut is refreshed and the flow is solved once more
-// before an invariant violation (std::logic_error) is reported.
+// Certified-subset discipline (RESEARCH_NOTES.md P2): after every operation oracle_.ess(v) is a subset of the true
+// Ess_G(v) that contains every t with psi(v,t) > 0 (initial psi over exact sets; a new psi is computed over the
+// stored sets; a deletion keeps the set of an unaffected vertex, adopts for a kappa-restored one the set stored at
+// COMMIT time — not the copy taken at evaluation time, which predates a refresh_all_cuts of step (iii) — and installs
+// the exact set of a kappa-dropped one, which contains t when the deletion is non-critical for (v,t); O5 moves
+// psi(p) onto a terminal already in the stored set; terminal removal and rounding recompute exact sets that
+// contain old \ removed; contraction keeps them). delete_and_commit asserts the invariant. Criticality of e for
+// such a pair is decided with the exact cut of G \ e (O2). The min-cost flow of step (iii) is first solved over the stored
+// subsets; if it is infeasible or yields no non-critical secondary arc (both impossible over the exact sets,
+// [Lem 8.5] / [Lem 8.4]) every cut is refreshed and the flow is solved once more before an invariant violation
+// (std::logic_error) is reported.
 #include "solver.hpp"
 
 #include <algorithm>
@@ -400,6 +403,13 @@ void GLWeightedSolver::trace_essential() {
 // The carried psi is a split witness [Def 5.3] of the current graph: positive entries on live essential
 // terminals (exact sets), Σ_t psi(v,t) = w_v, Σ_v psi(v,t) = recv_[t] <= c_t.
 void GLWeightedSolver::debug_check_witness(const char* where) {
+    // P2 first: the stored certified subsets (before any refresh makes them exact) contain every psi target.
+    for (int v : g_.live_nonterminals())
+        for (const auto& e : psi_[v])
+            if (e.first >= 0 && e.first < g_.k0() && !oracle_.ess(v).test(e.first))
+                throw std::logic_error(std::string("P2 violated after ") + where + ": psi(" + vs(v) + ", t_" + vs(e.first) + ") = " +
+                                       vs(e.second) + " but terminal " + vs(term_vertex_[e.first]) + " is not in the certified essential subset of " +
+                                       vs(v) + "; E = " + termset_json(oracle_.ess(v), term_vertex_));
     oracle_.refresh_all_cuts();
     const std::string at = std::string("split witness invariant violated after ") + where + ": ";
     std::vector<int64_t> got(g_.k0(), 0);
@@ -573,16 +583,33 @@ bool GLWeightedSolver::psi_survives_deletion(const std::vector<int>& affected, c
 
 // Delete the (already evaluated) arc set D and let the oracle adopt the flows of G \ D. Tails are queued for
 // step (ii) (their out-degree dropped). Counters `deletions` / `batched_deletions` are kept by the oracle.
+// P2: for an affected v whose kappa was restored, evaluate_deletion copied the subset stored at EVALUATION time;
+// step (iii) may have refreshed every cut since (trace mode, or the exact retry) and computed psi over the exact
+// sets, so the copy may lack a psi target. The set stored NOW is a certified subset of Ess_G(v) containing every
+// psi target, hence a subset of Ess_{G\D}(v) (O1, generalized [Lem 4.3]); adopting it keeps the invariant.
 void GLWeightedSolver::delete_and_commit(const std::vector<int>& D, const std::vector<int>& affected, std::vector<VertexFlow>& out) {
     Stats::Timer timer(stats_, "delete_commit");
-    for (int v : affected) mark_flow_arcs_dirty(v);  // the old paths through D are dropped
+    for (int v : affected) {
+        mark_flow_arcs_dirty(v);  // the old paths through D are dropped
+        if (g_.live(v) && !g_.is_terminal(v) && !out[v].cut_exact) out[v].ess = oracle_.ess(v);  // before the mutation
+    }
     for (int a : D) {
         push_degree_changed(g_.arc(a).tail);
         mark_candidate_dirty(g_.arc(a).tail);
         g_.delete_arc(a);
     }
     oracle_.commit_deletion(D, affected, out);
-    for (int v : affected) mark_flow_arcs_dirty(v);  // the rerouted paths gained users
+    for (int v : affected) {
+        mark_flow_arcs_dirty(v);  // the rerouted paths gained users
+        // P2 invariant: the certified subset stored for every live non-terminal contains every psi target.
+        if (!g_.live(v) || g_.is_terminal(v)) continue;
+        for (const auto& e : psi_[v])
+            if (!oracle_.ess(v).test(e.first))
+                throw std::logic_error("P2 violated after deleting " + vs(D.size()) + " arc(s): psi(" + vs(v) + ", t_" + vs(e.first) +
+                                       ") = " + vs(e.second) + " but t_" + vs(e.first) + " (vertex " + vs(term_vertex_[e.first]) +
+                                       ") is not in the certified essential set of " + vs(v) + "; E = " +
+                                       termset_json(oracle_.ess(v), term_vertex_) + (oracle_.flow(v).cut_exact ? " (exact)" : " (subset)"));
+    }
 }
 
 // ------------------------------------------------------------------------------------------ step (i)
@@ -1100,7 +1127,6 @@ SolveResult GLWeightedSolver::run() {
     Stats::Timer total(stats_, "total");
     SolveResult res;
     const int n = g_.n(), k = g_.k0();
-    res.witness.assign(n, -1);  // split witnesses live in the trace ("min_cost_split")
     if (trace_.enabled) {
         std::vector<std::pair<int, int>> arcs;
         for (int a = 0; a < g_.num_arc_ids(); ++a)
@@ -1177,6 +1203,8 @@ SolveResult GLWeightedSolver::run() {
     res.message = "ok";
     res.assignment = part_;
     res.parent = parent_;
+    res.witness.assign(n, -1);  // split witnesses live in the trace ("min_cost_split"); empty on a non-ok status
+                                // (as assignment / parent, the same convention as GLSolver::run)
     if (trace_.enabled) {
         std::vector<std::vector<int>> parts(k);
         for (int v = 0; v < n; ++v) parts[part_[v]].push_back(v);

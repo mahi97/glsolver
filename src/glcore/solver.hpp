@@ -26,9 +26,10 @@ struct SolverOptions {
 struct SolveResult {
     std::string status;               // "ok" | "precondition_failed"
     std::string message;
+    // The three vectors are filled (size n) only on "ok" and empty otherwise, in both solvers.
     std::vector<int> assignment;      // part index per vertex
     std::vector<int> parent;          // certificate: original out-neighbour in the same part, -1 for terminals
-    std::vector<int> witness;         // final/initial witness phi (terminal index) per vertex or -1
+    std::vector<int> witness;         // initial witness phi (terminal index) per vertex or -1 (weighted: all -1)
     bool k_T_connected = false;       // all kappa == k at the start
 };
 

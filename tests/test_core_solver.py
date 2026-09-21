@@ -511,3 +511,95 @@ def test_graph_size_series_is_monotone_and_bounded() -> None:
     assert all(a >= b and ma >= mb for (a, ma), (b, mb) in zip(sizes, sizes[1:]))
     times = res.stats["time_seconds"]
     assert {"total", "compute_all", "witness"} <= set(times) and times["total"] > 0
+
+
+# ---------------------------------------------------------------------------
+# 9. review fixes: malformed options, non-ok result shape, P2 subset commit after a cycle shift
+# ---------------------------------------------------------------------------
+BAD_OPTION_VALUES = [
+    ("threads", "x"), ("threads", None), ("threads", 1.5), ("threads", 2**40), ("seed", [1]),
+    ("trace", "x"), ("debug_asserts", object()), ("greedy_contraction", {}),
+]
+
+
+def test_malformed_options_are_status_error_never_raised() -> None:
+    """The binding's contract: a malformed `options` value comes back as status 'error' naming the key (like every
+    other invalid input; never a Python exception), while well-typed coercions (bool as int, int as bool, None as
+    False) and unknown keys keep working."""
+    for key, value in BAD_OPTION_VALUES:
+        out = _core.solve_general(3, [(2, 0), (2, 1)], [0, 1], [1, 0], {key: value})
+        assert out["status"] == "error" and f"option '{key}'" in out["message"], (key, value, out["message"])
+        assert out["assignment"] == [] and out["parent"] == [] and out["witness"] == []
+    out = _core.solve_general(3, [(2, 0), (2, 1)], [0, 1], [1, 0],
+                              {"threads": True, "trace": 1, "debug_asserts": None, "unknown_key": "ignored"})
+    assert out["status"] == "ok" and out["assignment"] == [0, 1, 0] and out["trace"]
+
+
+def test_non_ok_results_have_empty_vectors() -> None:
+    """assignment / parent / witness are filled (size n) only on 'ok' and are empty lists on precondition_failed
+    and error (the general and the weighted binding use the same convention)."""
+    for n, arcs, terms, caps in [(3, [(2, 0)], [0, 1], [0, 1]), (3, [(2, 0)], [0, 1], [1, 1])]:
+        out = _core.solve_general(n, arcs, terms, caps, {})
+        assert out["status"] == "precondition_failed", out
+        assert out["assignment"] == [] and out["parent"] == [] and out["witness"] == [], out
+    out = _core.solve_general(3, [(0, 5)], [1], [2], {})
+    assert out["status"] == "error" and out["assignment"] == [] and out["parent"] == [] and out["witness"] == []
+    ok = _core.solve_general(3, [(2, 0)], [0, 1], [1, 0], {})
+    assert ok["status"] == "ok" and ok["assignment"] == [0, 1, 0] and ok["parent"] == [-1, -1, 0] and ok["witness"] == [-1, -1, 0]
+
+
+# Found by fuzzing (random digraph, n = 28, k = 6, unbalanced capacities): under greedy_contraction=True,
+# lazy_shift=False, batch_unused_arcs=False the third cycle shift moves phi(21) onto a terminal outside the stale
+# certified subset E(21) = {t_0}, and the deletion of a secondary arc whose evaluation had restored kappa(21)
+# then committed that pre-shift subset.
+P2_STALE_SUBSET_CASE = {
+    "n": 28,
+    "terminals": [20, 14, 0, 12, 22, 7],
+    "capacities": [0, 2, 14, 5, 0, 1],
+    "arcs": [
+        (1, 10), (1, 12), (1, 14), (1, 15), (1, 23), (1, 24), (1, 25), (1, 26), (2, 7), (2, 8), (2, 9), (2, 12),
+        (2, 17), (2, 20), (2, 21), (2, 25), (2, 26), (3, 2), (3, 5), (3, 6), (3, 8), (3, 9), (3, 10), (3, 13),
+        (3, 14), (3, 15), (3, 16), (3, 19), (3, 21), (3, 22), (3, 25), (3, 26), (3, 27), (4, 2), (4, 10), (4, 13),
+        (4, 15), (4, 22), (4, 25), (4, 27), (5, 0), (5, 2), (5, 4), (5, 6), (5, 7), (5, 14), (5, 15), (5, 16),
+        (5, 18), (5, 20), (5, 23), (5, 25), (5, 27), (6, 1), (6, 4), (6, 7), (6, 11), (6, 12), (6, 13), (6, 16),
+        (6, 17), (6, 22), (6, 24), (6, 26), (6, 27), (8, 5), (8, 10), (8, 13), (8, 14), (8, 15), (8, 16), (8, 19),
+        (8, 22), (8, 23), (8, 24), (9, 4), (9, 5), (9, 10), (9, 11), (9, 13), (9, 16), (9, 18), (9, 19), (9, 21),
+        (9, 22), (9, 23), (9, 24), (9, 26), (10, 0), (10, 2), (10, 5), (10, 6), (10, 14), (10, 15), (10, 16), (10, 18),
+        (10, 21), (10, 23), (10, 24), (10, 26), (11, 1), (11, 3), (11, 8), (11, 15), (11, 17), (11, 24), (11, 27), (13, 2),
+        (13, 3), (13, 4), (13, 5), (13, 6), (13, 8), (13, 10), (13, 11), (13, 12), (13, 15), (13, 19), (13, 20), (13, 22),
+        (13, 23), (13, 25), (13, 27), (15, 3), (15, 6), (15, 9), (15, 16), (15, 17), (15, 20), (15, 25), (15, 26), (15, 27),
+        (16, 0), (16, 2), (16, 3), (16, 6), (16, 10), (16, 11), (16, 12), (16, 14), (16, 15), (16, 17), (16, 18), (16, 19),
+        (17, 0), (17, 3), (17, 6), (17, 11), (17, 15), (17, 21), (17, 22), (17, 26), (17, 27), (18, 3), (18, 4), (18, 5),
+        (18, 12), (18, 15), (18, 16), (18, 20), (18, 21), (18, 22), (19, 0), (19, 1), (19, 2), (19, 4), (19, 8), (19, 9),
+        (19, 11), (19, 16), (19, 22), (19, 23), (19, 24), (19, 26), (19, 27), (21, 3), (21, 4), (21, 8), (21, 9), (21, 10),
+        (21, 18), (23, 0), (23, 5), (23, 7), (23, 10), (23, 11), (23, 14), (23, 15), (23, 17), (23, 18), (23, 22), (23, 24),
+        (23, 26), (23, 27), (24, 0), (24, 4), (24, 11), (24, 12), (24, 15), (24, 18), (24, 19), (24, 23), (25, 3), (25, 5),
+        (25, 6), (25, 7), (25, 8), (25, 10), (25, 11), (25, 12), (25, 17), (25, 18), (25, 22), (25, 23), (26, 0), (26, 1),
+        (26, 3), (26, 4), (26, 5), (26, 8), (26, 9), (26, 10), (26, 16), (26, 19), (26, 22), (27, 0), (27, 4), (27, 5),
+        (27, 8), (27, 12), (27, 14), (27, 15), (27, 19), (27, 21),
+    ],
+}
+
+
+def test_p2_subset_contains_phi_after_cycle_shift_then_deletion() -> None:
+    """Regression for the P2 discipline (RESEARCH_NOTES.md P2, solver_general.cpp header): the certified subset
+    stored for v must contain phi(v) after EVERY operation. A cycle shift phi(v) := t_i between the evaluation of
+    the secondary arcs and the deletion of a kappa-restored one used to commit the PRE-shift copy of E(v), which
+    need not contain t_i. The core now adopts the subset stored at commit time and asserts phi(v) ∈ E(v) after
+    every deletion (status 'error' otherwise), so every option combination — with and without debug_asserts /
+    trace, which would otherwise mask stale subsets by refreshing every cut — must answer ok with an
+    independently verified partition."""
+    c = P2_STALE_SUBSET_CASE
+    inst = make_instance(c["n"], [tuple(a) for a in c["arcs"]], c["terminals"], c["capacities"], directed=True)
+    shifts = 0
+    for g, lz, b in itertools.product([True, False], repeat=3):
+        for debug, trace in ((False, False), (True, True)):
+            opts = {"greedy_contraction": g, "lazy_shift": lz, "batch_unused_arcs": b}
+            res = solve(inst, threads=1, debug=debug, trace=trace, options=opts)
+            assert_valid(res, inst, (g, lz, b, debug, trace))
+            check_arborescence(inst, res)
+            shifts += res.stats["cycle_shifts"]
+    assert shifts > 0
+    out = _core.solve_general(c["n"], c["arcs"], c["terminals"], c["capacities"],
+                              {"threads": 1, "greedy_contraction": True, "lazy_shift": False, "batch_unused_arcs": False})
+    assert out["status"] == "ok" and out["stats"]["cycle_shifts"] >= 3, out["message"]

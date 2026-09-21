@@ -5,9 +5,12 @@
 //   (step iii-b), O6 lazy ShiftAssignment restricted to the users U_i of each secondary arc, O8 parallel
 //   oracle, O9 bitsets. The paper's ShiftAssignment (step iii-c) is the exact fallback that guarantees
 //   progress [Lem 7.5, 7.11].
-// Certified-subset discipline (RESEARCH_NOTES.md P2): oracle_.ess(v) is a subset of the true Ess_G(v) that
-// always contains phi[v]; criticality for (v, phi(v)) is decided with the exact cut of G \ e (O2), and after
-// a cycle shift phi(v_i) := t_i the new terminal is certified with one exact cut (refresh_cut) [Lem 7.9].
+// Certified-subset discipline (RESEARCH_NOTES.md P2): after every operation oracle_.ess(v) is a subset of the
+// true Ess_G(v) that contains phi[v]. Every decision uses exact cuts: criticality for (v, phi(v)) is decided
+// with the exact cut of G \ e (O2), and after a cycle shift phi(v_i) := t_i the new terminal is certified with
+// one exact cut (refresh_cut) [Lem 7.9]. A deletion commit adopts, for an affected vertex whose kappa was
+// restored, the subset stored at COMMIT time (a subset of Ess_{G\D}(v) by O1) rather than the copy taken at
+// evaluation time, which predates such a refresh (delete_and_commit); the invariant is asserted there.
 // Invariant A1 (phi is a witness: phi[v] ∈ Ess_G(v), exact capacity counts) holds after every operation;
 // with opt.debug_asserts it is re-verified after each one (A1–A8 of paper_notes §7.2).
 #include "solver.hpp"
@@ -161,7 +164,15 @@ void GLSolver::trace_essential() {
 }
 
 // A1 (and A6/A8 after deletions / terminal removals): phi is a witness of the current graph [Def 5.1].
+// First the P2 invariant on the stored certified subsets (before any refresh makes them exact).
 void GLSolver::debug_check_witness(const char* where) {
+    for (int v : g_.live_nonterminals()) {
+        const int ti = phi_[v];
+        if (ti >= 0 && ti < g_.k0() && !oracle_.ess(v).test(ti))
+            throw std::logic_error(std::string("P2 violated after ") + where + ": phi(" + vs(v) + ") = t_" + vs(ti) + " (vertex " +
+                                   vs(term_vertex_[ti]) + ") is not in the certified essential subset of " + vs(v) + "; E = " +
+                                   termset_json(oracle_.ess(v), term_vertex_));
+    }
     oracle_.refresh_all_cuts();
     std::vector<int64_t> counts(g_.k0(), 0);
     for (int v : g_.live_nonterminals()) {
@@ -204,16 +215,32 @@ bool GLSolver::deletion_keeps_witness(const std::vector<int>& affected, const st
 
 // Delete the (already evaluated) arc set D and let the oracle adopt the flows of G \ D. Tails are queued for
 // step (ii) (their out-degree dropped). Counters `deletions` / `batched_deletions` are kept by the oracle.
+// P2: for an affected v whose kappa was restored, evaluate_deletion copied the subset stored at EVALUATION time
+// (O1: it stays a subset of Ess_{G\D}(v)); in ShiftAssignment a cycle shift between evaluation and commit
+// re-certifies the new phi(v) only in the oracle's stored set (refresh_cut), so the copy may lack phi(v). The
+// set stored NOW is a certified subset of Ess_G(v) that contains phi(v), hence also a subset of Ess_{G\D}(v)
+// (O1, generalized [Lem 4.3]); adopting it keeps phi[v] ∈ oracle_.ess(v) across the commit.
 void GLSolver::delete_and_commit(const std::vector<int>& D, const std::vector<int>& affected, std::vector<VertexFlow>& out) {
     Stats::Timer timer(stats_, "delete_commit");
-    for (int v : affected) mark_flow_arcs_dirty(v);  // the old paths through D are dropped
+    for (int v : affected) {
+        mark_flow_arcs_dirty(v);  // the old paths through D are dropped
+        if (g_.live(v) && !g_.is_terminal(v) && !out[v].cut_exact) out[v].ess = oracle_.ess(v);  // before the mutation
+    }
     for (int a : D) {
         push_degree_changed(g_.arc(a).tail);
         mark_candidate_dirty(g_.arc(a).tail);
         g_.delete_arc(a);
     }
     oracle_.commit_deletion(D, affected, out);
-    for (int v : affected) mark_flow_arcs_dirty(v);  // the rerouted paths gained users
+    for (int v : affected) {
+        mark_flow_arcs_dirty(v);  // the rerouted paths gained users
+        // P2 invariant: the certified subset stored for every live non-terminal contains its witness.
+        if (g_.live(v) && !g_.is_terminal(v) && (phi_[v] < 0 || !oracle_.ess(v).test(phi_[v])))
+            throw std::logic_error("P2 violated after deleting " + vs(D.size()) + " arc(s): phi(" + vs(v) + ") = " +
+                                   (phi_[v] < 0 ? std::string("none") : "t_" + vs(phi_[v]) + " (vertex " + vs(term_vertex_[phi_[v]]) + ")") +
+                                   " is not in the certified essential set of " + vs(v) + "; E = " + termset_json(oracle_.ess(v), term_vertex_) +
+                                   (oracle_.flow(v).cut_exact ? " (exact)" : " (subset)"));
+    }
 }
 
 // ------------------------------------------------------------------------------------------ initial witness

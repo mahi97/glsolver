@@ -1,7 +1,7 @@
 // pybind11 binding of the unweighted general solver: _core.solve_general(n, arcs, terminals, capacities,
 // options) -> dict, the contract of src/glsolver/api.py (_run_core). run() executes with the GIL released;
-// every std::exception raised by the core (invalid input, an invariant violation reported as
-// std::logic_error) is returned as status "error" with its message instead of propagating, so the Python
+// every std::exception raised by the core (invalid input, malformed options, an invariant violation reported
+// as std::logic_error) is returned as status "error" with its message instead of propagating, so the Python
 // layer can report it and tests can assert on it.
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -59,15 +59,37 @@ py::list trace_to_list(const Trace& tr) {
     return events;
 }
 
+// Python type name of an object, for option error messages ("str", "NoneType", ...).
+std::string option_type_name(const py::handle& obj) {
+    try {
+        return py::str(py::type::handle_of(obj).attr("__name__")).cast<std::string>();
+    } catch (const std::exception&) {
+        return "?";
+    }
+}
+
+// Malformed option values (wrong type, out of range) are reported as std::invalid_argument naming the key, so
+// that the caller can return them as status "error" like every other invalid input (never a Python exception).
 SolverOptions parse_options(const py::dict& options) {
     SolverOptions o;
     auto get_int = [&](const char* key, int def) -> int {
         if (!options.contains(key)) return def;
-        return options[py::str(key)].cast<int>();
+        const py::object v = options[py::str(key)];
+        try {
+            return v.cast<int>();
+        } catch (const py::cast_error&) {
+            throw std::invalid_argument(std::string("solve_general: option '") + key +
+                                        (py::isinstance<py::int_>(v) ? "' is out of the range of a C int" : "' must be an int (got " + option_type_name(v) + ")"));
+        }
     };
     auto get_bool = [&](const char* key, bool def) -> bool {
         if (!options.contains(key)) return def;
-        return options[py::str(key)].cast<bool>();
+        const py::object v = options[py::str(key)];
+        try {
+            return v.cast<bool>();
+        } catch (const py::cast_error&) {
+            throw std::invalid_argument(std::string("solve_general: option '") + key + "' must be a bool (got " + option_type_name(v) + ")");
+        }
     };
     o.threads = get_int("threads", 0);
     o.seed = get_int("seed", 0);
@@ -97,9 +119,9 @@ void bind_solver(py::module_& m) {
             d["k_T_connected"] = false;
             d["stats"] = solver_stats_to_dict(Stats{});
             d["trace"] = py::list();
-            const SolverOptions opt = parse_options(options);
             std::unique_ptr<GLSolver> solver;
             try {
+                const SolverOptions opt = parse_options(options);  // malformed options -> status "error" too
                 solver = std::make_unique<GLSolver>(n, arcs, terminals, capacities, opt);
             } catch (const std::exception& e) {
                 d["message"] = std::string(e.what());
@@ -136,7 +158,8 @@ void bind_solver(py::module_& m) {
         "k_T_connected, stats, trace). GLPartition [Alg 1] + ShiftAssignment [Alg 2] with the exact optimizations O1–O9 "
         "(docs/optimizations.md). options keys: threads, seed, greedy_contraction, lazy_shift, batch_unused_arcs, "
         "debug_asserts, trace, record_cuts, check_precondition. status is 'ok', 'precondition_failed' (FEAC fails; a "
-        "partition may still exist) or 'error' (the C++ exception message; never raised).");
+        "partition may still exist) or 'error' (the C++ exception message: invalid input, a malformed option value or an "
+        "invariant violation; never raised). On a non-ok status assignment, parent and witness are empty lists.");
 }
 
 }  // namespace glcore

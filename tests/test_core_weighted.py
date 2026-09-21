@@ -694,3 +694,60 @@ def test_medium_scaling_fast() -> None:
         assert_valid(res, inst, inst.name)
         check_arborescence(inst, res)
         assert dt < 60.0, dt
+
+
+# ---------------------------------------------------------------------------
+# review fixes: malformed options, non-ok result shape (same convention as solve_general), P2 subsets
+# ---------------------------------------------------------------------------
+def test_malformed_options_are_status_error_never_raised() -> None:
+    """A malformed `options` value is status 'error' naming the key, never a Python exception; well-typed
+    coercions and unknown keys keep working."""
+    for key, value in [("threads", "x"), ("threads", None), ("threads", 1.5), ("threads", 2**40), ("seed", [1]),
+                       ("trace", "x"), ("lazy_shift", object()), ("batch_unused_arcs", {})]:
+        out = _core.solve_weighted(3, [(2, 0), (2, 1)], [0, 1], [1, 0], [0, 0, 1], {key: value})
+        assert out["status"] == "error" and f"option '{key}'" in out["message"], (key, value, out["message"])
+        assert out["assignment"] == [] and out["parent"] == [] and out["witness"] == []
+    out = _core.solve_weighted(3, [(2, 0), (2, 1)], [0, 1], [1, 0], [0, 0, 1],
+                               {"threads": True, "trace": 1, "debug_asserts": None, "unknown_key": "ignored"})
+    assert out["status"] == "ok" and out["assignment"] == [0, 1, 0] and out["trace"]
+
+
+def test_non_ok_results_have_empty_vectors_like_solve_general() -> None:
+    """assignment / parent / witness are filled (size n) only on 'ok'; on precondition_failed and error they are
+    empty lists in BOTH bindings (the weighted solver used to return n entries of -1 as witness)."""
+    fesac_fails = _core.solve_weighted(3, [(2, 0)], [0, 1], [0, 1], [0, 0, 1], {})
+    sum_fails = _core.solve_weighted(3, [(2, 0)], [0, 1], [0, 0], [0, 0, 1], {})
+    feac_fails = _core.solve_general(3, [(2, 0)], [0, 1], [0, 1], {})
+    for out in (fesac_fails, sum_fails, feac_fails):
+        assert out["status"] == "precondition_failed", out
+        assert out["assignment"] == [] and out["parent"] == [] and out["witness"] == [], out
+    for out in (_core.solve_weighted(3, [(0, 5)], [1], [2], [1, 0, 1], {}), _core.solve_general(3, [(0, 5)], [1], [2], {})):
+        assert out["status"] == "error" and out["assignment"] == [] and out["parent"] == [] and out["witness"] == []
+    okw = _core.solve_weighted(3, [(2, 0)], [0, 1], [1, 0], [0, 0, 1], {})
+    ok = _core.solve_general(3, [(2, 0)], [0, 1], [1, 0], {})
+    assert okw["status"] == ok["status"] == "ok"
+    assert okw["assignment"] == ok["assignment"] == [0, 1, 0] and okw["parent"] == ok["parent"] == [-1, -1, 0]
+    assert okw["witness"] == [-1, -1, -1] and ok["witness"] == [-1, -1, 0]
+
+
+def test_p2_subsets_contain_psi_targets_through_step_iii_refreshes() -> None:
+    """P2 (solver_weighted.cpp header): after every operation every t with psi(v,t) > 0 is in the stored certified
+    subset E(v). In step (iii) a refresh_all_cuts (trace mode, or the exact retry) followed by a new psi and the
+    deletion of a kappa-restored secondary arc used to commit the pre-refresh copy of E(v). The core now adopts the
+    subset stored at commit time and asserts the invariant after every deletion (status 'error' otherwise) and, in
+    debug mode, before the refresh of every check; the instance of the general-solver regression (unit weights and
+    a weighted variant) must answer ok with verified partitions under every option combination."""
+    from test_core_solver import P2_STALE_SUBSET_CASE as c
+
+    base = make_instance(c["n"], [tuple(a) for a in c["arcs"]], c["terminals"], c["capacities"], directed=True)
+    weighted = generators.weighted_variant(base, 1836, 3, 2)
+    for inst in (base, weighted):
+        mcf = 0
+        for g, lz, b in itertools.product([True, False], repeat=3):
+            for debug, trace in ((False, False), (True, True), (False, True)):
+                opts = {"greedy_contraction": g, "lazy_shift": lz, "batch_unused_arcs": b}
+                res = solve(inst, threads=1, debug=debug, trace=trace, options=opts)
+                assert_valid(res, inst, (inst.name, g, lz, b, debug, trace))
+                check_arborescence(inst, res)
+                mcf += res.stats["min_cost_flow_calls"]
+        assert mcf > 0
