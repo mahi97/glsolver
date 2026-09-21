@@ -101,7 +101,24 @@ on `k`-connected undirected inputs, giving `O(n k (n+m))` overall. Open.
 
 ## Empirical observations
 
-(filled during Stage G–I; see benchmarks/ and FINAL_REPORT.md)
+### E1. First measurements of the C++ core (2026-09-21, 20-core Cortex-X925, 8 threads, release build)
+
+| instance | n / m / k | general solver | weighted solver (unit weights) | notes |
+|---|---|---|---|---|
+| official counterexample, 1 copy | 333 / 2 160 / 9 | 0.04 s | 0.05 s | pure-Python reference: 900 s |
+| official counterexample, 17 copies | 3 789 / 33 264 / 9 | 1.8 s | 1.4 s | 3 780 contractions, 24 105 deletions, 147 cycle shifts; 3 768 of 3 780 contractions via greedy O5 |
+| Harary H_{8,2000} | 2 000 / 8 000 / 8 | 10–15 s | 9.7 s | ~60 % of the time in `after_contraction` path translation (long circulant flow paths) |
+| random 8-regular | 5 000 / 20 000 / 8 | 30–40 s | — | dominated by warm-started evaluations inside ShiftAssignment; O5 succeeds in only ~10 % of attempts |
+| Erdős–Rényi | 2 000 / 399 355 / 6 | 2–3 s | — | 368 073 deletions, almost all in O1 batches; every contraction greedy; **zero** ShiftAssignment calls |
+
+Observations: (a) on dense inputs the certificate-guided path (O1 + O5) alone finishes the run — the paper's
+cycle-shift machinery is never needed; (b) on sparse regular graphs the greedy attempt often fails and the exact
+fallback dominates; a credit-based throttle (attempt cost 4, success credit 16) and per-vertex backoff halved the
+running time; (c) contraction cost is not free: translating every stored path through the contracted vertex is
+`O(Σ_v |path through p|)`, which on high-diameter graphs (Harary) is the bottleneck — a cheaper representation
+(store paths as predecessor pointers so translation is O(1) per path) is the obvious next optimization;
+(d) exhaustive correctness: 145 400 undirected instances (n ≤ 7) and 3 278 digraphs (n ≤ 4) solved by both C++
+solvers with debug assertions, 0 failures.
 
 ## Failed ideas
 
