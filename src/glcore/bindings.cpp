@@ -1,6 +1,8 @@
-// pybind11 bindings for the glcore C++ engine. Extended in later stages.
+// pybind11 module entry point for the glcore C++ engine.
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+
+#include "bindings.hpp"
 
 namespace py = pybind11;
 
@@ -13,4 +15,7 @@ PYBIND11_MODULE(_core, m) {
 #else
         false;
 #endif
+    glcore::bind_graph_flow(m);
+    glcore::bind_matching_dag(m);
+    glcore::bind_solver(m);
 }
