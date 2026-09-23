@@ -183,7 +183,7 @@ predicts, confirmed empirically.
 ### 6.3 Against the baselines
 
 At n = 100, the largest size the pure-Python reference reaches in reasonable time, the C++ core is
-**1 700–28 000× faster** (Erdős–Rényi 84.3 s → 0.003 s; Harary 9.0 s → 0.0035 s; random regular
+**1 500–28 000× faster** (Erdős–Rényi 84.3 s → 0.003 s; Harary 9.0 s → 0.0035 s; random regular
 15.7 s → 0.0049 s). Brute force is limited to about n = 12 and the MILP to about n = 40; past that the
 evidence is the independent verifier rather than a second solver.
 

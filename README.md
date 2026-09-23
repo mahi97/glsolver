@@ -221,23 +221,32 @@ O7–O10 (batched secondary-arc deletion, OpenMP-parallel per-vertex oracle, bit
 DAG heap/stack variants) are in the same document; the `O(n+m)` DAG variant is proved in
 `RESEARCH_NOTES.md` P1 and yields the heap version's contraction sequence.
 
-**Measured so far** (first timings, `RESEARCH_NOTES.md` §E1; 20-core Cortex-X925, 8 threads,
-release build):
+**Measured** (final sweep, `RESEARCH_NOTES.md` §E6 and `docs/benchmarks.md` §5; 20-core aarch64,
+8 threads, release build; medians over three seeds to `n = 2000`, single runs above; every partition
+accepted by the independent verifier):
 
-| instance | `n` / `m` / `k` | general | weighted (unit weights) |
-|---|---|---|---|
-| official counterexample, 1 copy | 333 / 2 160 / 9 | 0.04 s | 0.05 s |
-| official counterexample, 17 copies | 3 789 / 33 264 / 9 | 1.8 s | 1.4 s |
-| Harary `H_{8,2000}` | 2 000 / 8 000 / 8 | 10–15 s | 9.7 s |
-| random 8-regular | 5 000 / 20 000 / 8 | 30–40 s | — |
-| Erdős–Rényi | 2 000 / 399 355 / 6 | 2–3 s | — |
-| random `k`-`T`-connected DAG | 200 000 / 1 600 000 | 0.3 s (DAG solver) | |
+| family (`k = 4`) | `n = 1000` | `n = 2000` | `n = 5000` | `n = 10000` | growth |
+|---|---:|---:|---:|---:|---:|
+| random 4-regular | 0.19 s | 0.47 s | 2.25 s | 12.4 s | `n^1.75` |
+| sparse `k`-connected | 0.18 s | 0.40 s | 2.08 s | 12.1 s | `n^1.77` |
+| Harary `H_{4,n}` (exactly `k`-connected) | 0.53 s | 3.44 s | 30.5 s | 418 s | `n^2.76` |
+| Erdős–Rényi (`m ≈ n²/10`) | 0.13 s | 1.14 s | 28.1 s | 210 s (`m = 10^7`) | `m^1.5` |
+| DAG solver on `k`-`T`-connected DAGs | 0.3 ms | 0.7 ms | 1.6 ms | 2.6 ms | `n^1.0` |
 
-For scale, the 1-copy counterexample the core solves in 0.04 s takes the pure-Python reference
-**900 s**. Two structural observations already fall out: on dense inputs the certificate-guided
-path (O1 + O5) alone finishes the run and the cycle-shift machinery is never invoked (zero
-`ShiftAssignment` calls on the Erdős–Rényi instance), whereas on sparse regular graphs the greedy
-attempt usually fails and the exact fallback dominates. The full sweep is run by
+The DAG solver takes **0.24–0.70 s** on `n = 10^6`, `m ≈ 5·10^6` single-threaded. The official
+counterexample is solved in 0.04 s (1 copy, `n = 333`) and 1.8 s (17 copies, `n = 3789`); the
+pure-Python reference needs **900 s** for the 1-copy instance. At `n = 100`, the largest size the
+reference reaches in reasonable time, the core is **1 500–28 000×** faster on identical instances.
+
+Peak memory, measured per process with `VmHWM` (`ru_maxrss` is inherited across `fork` and silently
+reported a parent's footprint — see §E6): `n = 10000` costs 102 MB on random regular, 144 MB on
+sparse `k`-connected and 2.79 GB on Harary, while the 10-million-arc Erdős–Rényi instance costs
+2.86 GB of which 2.57 GB is the instance itself and only ≈290 MB the solver.
+
+Two structural observations fall out: on dense inputs the certificate-guided path (O1 + O5) alone
+finishes the run and the cycle-shift machinery is never invoked (zero `ShiftAssignment` calls on the
+Erdős–Rényi instance), whereas on sparse regular graphs the greedy attempt usually fails and the
+exact fallback dominates. The full sweep is run by
 `scripts/run_benchmarks.sh`; final numbers **see `docs/benchmarks.md`**, dashboard at
 `benchmarks/results/dashboard.html`.
 
