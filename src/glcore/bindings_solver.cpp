@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "bindings.hpp"
+#include "bindings_arcs.hpp"
 #include "solver.hpp"
 #include "stats.hpp"
 #include "trace.hpp"
@@ -22,8 +23,6 @@ namespace py = pybind11;
 
 namespace glcore {
 namespace {
-
-using ArcList = std::vector<std::pair<int, int>>;
 
 // Stats -> dict (docs/api.md `stats` field; same layout as the DAG binding).
 py::dict solver_stats_to_dict(const Stats& s) {
@@ -108,7 +107,7 @@ SolverOptions parse_options(const py::dict& options) {
 void bind_solver(py::module_& m) {
     m.def(
         "solve_general",
-        [](int n, const ArcList& arcs, const std::vector<int>& terminals, const std::vector<int64_t>& capacities,
+        [](int n, const py::object& arcs_obj, const std::vector<int>& terminals, const std::vector<int64_t>& capacities,
            const py::dict& options) {
             py::dict d;
             d["status"] = "error";
@@ -120,9 +119,13 @@ void bind_solver(py::module_& m) {
             d["stats"] = solver_stats_to_dict(Stats{});
             d["trace"] = py::list();
             std::unique_ptr<GLSolver> solver;
+            ArcList arcs;
             try {
+                arcs = arcs_from_object(arcs_obj, "solve_general");  // numpy (m, 2) int array or (u, v) pairs
                 const SolverOptions opt = parse_options(options);  // malformed options -> status "error" too
                 solver = std::make_unique<GLSolver>(n, arcs, terminals, capacities, opt);
+            } catch (const py::builtin_exception&) {
+                throw;  // TypeError / ValueError for a wrong arcs type or shape, as for any wrong argument type
             } catch (const std::exception& e) {
                 d["message"] = std::string(e.what());
                 return d;
@@ -155,7 +158,8 @@ void bind_solver(py::module_& m) {
         },
         py::arg("n"), py::arg("arcs"), py::arg("terminals"), py::arg("capacities"), py::arg("options") = py::dict(),
         "solve_general(n, arcs, terminals, capacities, options={}) -> dict(status, message, assignment, parent, witness, "
-        "k_T_connected, stats, trace). GLPartition [Alg 1] + ShiftAssignment [Alg 2] with the exact optimizations O1–O9 "
+        "k_T_connected, stats, trace). arcs: a numpy integer array of shape (m, 2) (int32 read in place) or a sequence "
+        "of (u, v) pairs. GLPartition [Alg 1] + ShiftAssignment [Alg 2] with the exact optimizations O1–O9 "
         "(docs/optimizations.md). options keys: threads, seed, greedy_contraction, lazy_shift, batch_unused_arcs, "
         "debug_asserts, trace, record_cuts, check_precondition. status is 'ok', 'precondition_failed' (FEAC fails; a "
         "partition may still exist) or 'error' (the C++ exception message: invalid input, a malformed option value or an "

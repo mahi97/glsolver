@@ -21,7 +21,9 @@ import os
 import resource
 import time
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
+
+import numpy as np
 
 from glsolver.instance import Instance, from_networkx, make_instance
 from glsolver.verify import VerificationReport, verify_instance_parts
@@ -74,6 +76,28 @@ class GLResult:
             f"{self.algorithm}: status={self.status} n={self.instance.n} m={self.instance.m} "
             f"k={self.instance.k} runtime={self.runtime:.4f}s verifier={v}"
         )
+
+
+def _lazy_certificate_property() -> property:
+    """``GLResult.certificate`` backed by ``_certificate``: a dict, or a zero-argument callable that builds
+    it on first access (the C++ backends hand over ``parent`` / ``witness`` arrays of length n; the
+    ``{v: parent_v}`` dicts are only built when somebody reads the certificate, RESEARCH_NOTES.md E4).
+    Installed after the dataclass is built, so the field keeps its documented type and default."""
+
+    def fget(self: GLResult) -> dict[str, Any]:
+        c = self.__dict__.get("_certificate")
+        if callable(c):
+            c = c()
+            self.__dict__["_certificate"] = c
+        return c
+
+    def fset(self: GLResult, value: Any) -> None:
+        self.__dict__["_certificate"] = value
+
+    return property(fget, fset, doc="in-arborescence certificate (docs/api.md); built lazily by the C++ backends")
+
+
+GLResult.certificate = _lazy_certificate_property()  # type: ignore[assignment]
 
 
 def _jsonable(x: Any) -> Any:
@@ -251,20 +275,26 @@ def partition(graph: Any, terminals: Sequence[Any], sizes: Sequence[int] | None 
 # --------------------------------------------------------------------------- backends
 
 def _assignment_from_parts(inst: Instance, parts: Sequence[Sequence[int]]) -> list[int]:
-    a = [-1] * inst.n
+    """Part index per vertex (-1 if in no part); a later part wins; ids outside ``0..n-1`` are ignored."""
+    n = inst.n
+    a = np.full(n, -1, dtype=np.int64)
     for i, p in enumerate(parts):
-        for v in p:
-            if 0 <= v < inst.n:
-                a[v] = i
-    return a
+        pv = np.asarray(list(p), dtype=np.int64).reshape(-1)
+        a[pv[(pv >= 0) & (pv < n)]] = i
+    return a.tolist()
 
 
 def _parts_from_assignment(inst: Instance, assignment: Sequence[int]) -> list[list[int]]:
-    parts: list[list[int]] = [[] for _ in inst.terminals]
-    for v, i in enumerate(assignment):
-        if i >= 0:
-            parts[i].append(v)
-    return [sorted(p) for p in parts]
+    """``parts[i]`` = ascending vertices with ``assignment[v] == i`` (negative entries are unassigned)."""
+    k = len(inst.terminals)
+    a = np.asarray(assignment, dtype=np.int64).reshape(-1)
+    idx = np.flatnonzero(a >= 0)
+    if idx.size and int(a[idx].max()) >= k:
+        raise IndexError("part index out of range in the assignment")
+    order = idx[np.argsort(a[idx], kind="stable")]  # grouped by part, ascending within a part
+    counts = np.bincount(a[idx], minlength=k)
+    ends = np.cumsum(counts)
+    return [order[s:e].tolist() for s, e in zip((ends - counts).tolist(), ends.tolist())]
 
 
 def _run(inst: Instance, algo: str, opts: dict[str, Any]) -> GLResult:
@@ -338,11 +368,32 @@ def _core_options(inst: Instance, opts: dict[str, Any]) -> dict[str, Any]:
     return o
 
 
+def _core_certificate_builder(
+    inst: Instance, parent: Sequence[int] | None, witness: Sequence[int] | None
+) -> Callable[[], dict[str, Any]]:
+    """Deferred ``{"parents": {v: parent_v}, "witness": {v: terminal}}`` from the core's per-vertex arrays
+    (entries ``< 0`` / ``None`` mean "none"); ``witness`` is present iff the core returned a non-empty list."""
+    terminals = inst.terminals
+
+    def build() -> dict[str, Any]:
+        cert: dict[str, Any] = {}
+        par = np.asarray([-1 if p is None else p for p in (parent or [])], dtype=np.int64)
+        keep = np.flatnonzero(par >= 0)
+        cert["parents"] = dict(zip(keep.tolist(), par[keep].tolist()))
+        if witness:
+            wit = np.asarray([-1 if t is None else t for t in witness], dtype=np.int64)
+            keep = np.flatnonzero(wit >= 0)
+            cert["witness"] = {v: terminals[t] for v, t in zip(keep.tolist(), wit[keep].tolist())}
+        return cert
+
+    return build
+
+
 def _run_core(inst: Instance, algo: str, opts: dict[str, Any]) -> GLResult:
     core = _core()
     if core is None or not core_available(algo):
         raise RuntimeError(f"the C++ backend for {algo!r} is not built; use a reference/oracle algorithm or rebuild")
-    arcs = [list(a) for a in inst.arcs]
+    arcs = inst.arc_array  # int32 (m, 2): read in place by the binding, no per-arc Python objects (E4)
     caps = [int(c) for c in inst.capacities]
     w = [int(x) for x in inst.weights] if inst.weights is not None else [1] * inst.n
     if algo == "dag":
@@ -358,11 +409,9 @@ def _run_core(inst: Instance, algo: str, opts: dict[str, Any]) -> GLResult:
         out = core.solve_general(inst.n, arcs, list(inst.terminals), caps, _core_options(inst, opts))
     status = out["status"]
     parts = _parts_from_assignment(inst, out["assignment"]) if status == "ok" else []
-    cert: dict[str, Any] = {}
+    cert: dict[str, Any] | Callable[[], dict[str, Any]] = {}
     if status == "ok":
-        cert["parents"] = {v: p for v, p in enumerate(out.get("parent", [])) if p is not None and p >= 0}
-        if out.get("witness"):
-            cert["witness"] = {v: inst.terminals[t] for v, t in enumerate(out["witness"]) if t is not None and t >= 0}
+        cert = _core_certificate_builder(inst, out.get("parent"), out.get("witness"))
     trace = None
     if opts.get("trace") and out.get("trace") is not None:
         trace = []

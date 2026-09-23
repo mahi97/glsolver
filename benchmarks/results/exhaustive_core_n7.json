@@ -1,0 +1,48 @@
+{
+ "aborted": false,
+ "directed": {
+  "by_n": {},
+  "feac": 0,
+  "instances": 0,
+  "k_T_connected": 0,
+  "non_feac": 0,
+  "non_feac_with_partition": 0,
+  "solver_runs": {},
+  "timeouts": 0
+ },
+ "directed_ks": null,
+ "directed_mask_sample": null,
+ "directed_max_n": null,
+ "directed_min_capacity": 0,
+ "directed_min_n": null,
+ "failures": [],
+ "failures_saved": [],
+ "jobs": 16,
+ "max_k": 3,
+ "max_n": 7,
+ "oracles": false,
+ "seconds": 17.51,
+ "seed": 0,
+ "solvers": [
+  "general",
+  "weighted"
+ ],
+ "time_limit": 20.0,
+ "timeouts": 0,
+ "timestamp": "20260921T110313Z",
+ "undirected": {
+  "by_n": {
+   "7": 136339
+  },
+  "feac": 0,
+  "instances": 136339,
+  "k_T_connected": 0,
+  "non_feac": 0,
+  "non_feac_with_partition": 0,
+  "solver_runs": {
+   "general": 136339,
+   "weighted": 136339
+  },
+  "timeouts": 0
+ }
+}

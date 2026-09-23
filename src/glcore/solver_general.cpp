@@ -17,6 +17,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -48,6 +51,34 @@ constexpr int kGreedyMaxBackoff = 64;        // O5: a failed candidate is skippe
 constexpr int kGreedyCreditMax = 48;
 constexpr int kGreedyCreditAttempt = 4;
 constexpr int kGreedyCreditSuccess = 16;
+// E4 predictor (RESEARCH_NOTES.md E4): candidates ranked by the cached score are re-ranked among the best
+// kGreedyPreselect by an exact safety test; a candidate with an unsafe user is vetoed after
+// kGreedyRiskyFailures failed attempts unless it becomes safe (see step_greedy_contraction).
+constexpr int kGreedyPreselect = 16;
+constexpr int kGreedyRiskyFailures = 2;
+
+// E4 research instrumentation of O5 (RESEARCH_NOTES.md E4): with the environment variable GLCORE_GREEDY_LOG set
+// to a file name, every greedy attempt appends one CSV row of cheap pre-attempt features and its outcome.
+// Off by default (one pointer test per attempt); never changes what the solver does.
+struct GreedyLog {
+    std::FILE* f = nullptr;
+    GreedyLog() {
+        const char* path = std::getenv("GLCORE_GREEDY_LOG");
+        if (!path || !*path) return;
+        f = std::fopen(path, "a");
+        if (!f) return;
+        std::fseek(f, 0, SEEK_END);
+        if (std::ftell(f) == 0)
+            std::fputs("step,live_nt,live_arcs,k_live,credit,rank,n_cands,p,t,failures_p,dsize,outdeg_p,indeg_p,kappa_p,"
+                       "users_total,users_distinct,max_arc_users,term_arcs,users_on_term_arcs,risky_simple,risky_exact,"
+                       "users_full,users_tight,min_head_indeg,self_users,ok,affected,dropped,failing,eval_us\n", f);
+    }
+    ~GreedyLog() { if (f) std::fclose(f); }
+};
+std::FILE* greedy_log() {
+    static GreedyLog g;
+    return g.f;
+}
 
 }  // namespace
 
@@ -149,10 +180,12 @@ void GLSolver::trace_essential() {
         ess.add(v, termset_json(f.ess, term_vertex_));
         kappa.add(v, vs(f.kappa));
         if (opt_.record_cuts && f.cut_exact) {
+            std::vector<Side> side;
+            oracle_.sides(v, side);  // materialized on demand (one reverse BFS); never stored per flow
             std::vector<int> L, S, R;
             for (int x = 0; x < g_.n(); ++x) {
                 if (!g_.live(x)) continue;
-                (f.side[x] == Side::L ? L : (f.side[x] == Side::S ? S : R)).push_back(x);
+                (side[x] == Side::L ? L : (side[x] == Side::S ? S : R)).push_back(x);
             }
             cuts.add(v, JsonObject().raw("L", json_list(L)).raw("S", json_list(S)).raw("R", json_list(R)).build());
         }
@@ -393,7 +426,7 @@ void GLSolver::refresh_dirty_candidates() {
         int64_t users = 0;
         for (int a : g_.out_arcs(p)) {
             if (a == a_phi) continue;
-            const size_t u = oracle_.users_of_arc(a).size();
+            const size_t u = oracle_.num_users_of_arc(a);
             users += (int64_t)u;
             if (u == 0 && opt_.batch_unused_arcs) batch_arcs_.push_back(a);
         }
@@ -442,8 +475,27 @@ bool GLSolver::step_batch_unused_arcs() {
 
 // Try to make a pre-terminal p with (p, phi(p)) ∈ E out-degree 1 by deleting D_p = out(p) \ {(p, phi(p))};
 // valid iff phi(v) ∈ Ess_{G\D_p}(v) for every v (§13.1), tested exactly on the affected vertices only (O1/O2).
-// Candidates are ordered by (flows using D_p, |D_p|, p) from the cached scores; a failed candidate backs
-// off exponentially and the credit throttle bounds the work spent on instances where O5 rarely succeeds.
+// Candidates are pre-selected by (flows using D_p, |D_p|, p) from the cached scores, then re-ranked by the E4
+// predictor below; a failed candidate backs off exponentially and the credit throttle bounds the work spent
+// on instances where O5 rarely succeeds.
+//
+// E4 predictor (RESEARCH_NOTES.md E4). A user v != p of an arc a = (p, q) in D_p is SAFE iff no path of F_v
+// other than the one through a ends at t = phi(p). Deleting D_p then cannot lower kappa(v): remove the path
+// through a, and its prefix up to p followed by the arc (p, t) is an augmenting path of the residual network
+// of G \ D_p (the prefix is vertex-disjoint from the other paths, t is a terminal, hence a sink with no
+// out-arcs, and no remaining path ends at t), so the warm-started re-augmentation of O2 restores kappa(v) and
+// the certified subset survives (O1). The tail p itself always passes (Ess_{G\D_p}(p) = {t}). Hence a
+// candidate whose users are all safe ("certain") passes the exact test with probability 1 — this is a
+// theorem, not a heuristic, and the test costs O(sum of |users| * kappa) per candidate. Measured on random
+// 4-regular graphs (14 474 logged attempts, n = 2 000): certain candidates succeed in 100 % of attempts, a
+// candidate with an unsafe user in 16–25 %, and the success rate collapses with the candidate's own failure
+// count (median 0 previous failures for successes, 7 for failures: the capped backoff keeps re-attempting
+// chronic failures). Rule: among the kGreedyPreselect best-scored candidates try the certain ones first
+// (fewest users), then the risky ones by (previous failures, users); a risky candidate is vetoed once it has
+// failed more than kGreedyRiskyFailures times, until it becomes certain. On the logs this keeps 95–97 % of the
+// successes and skips 71–81 % of the failures. Exactness is untouched: the predictor only chooses which
+// FEAC-preserving deletion is *tested*; every deletion is still validated by evaluate_deletion (§13.1).
+// GLCORE_GREEDY_PREDICTOR=0 in the environment disables the re-ranking and the veto (same-binary A/B).
 bool GLSolver::step_greedy_contraction() {
     Stats::Timer timer(stats_, "greedy");
     if (greedy_credit_ <= 0) {
@@ -464,14 +516,63 @@ bool GLSolver::step_greedy_contraction() {
     }
     if (cands.empty()) return false;
     const int budget = greedy_credit_ >= 2 * kGreedyCreditSuccess ? kGreedyCandidates : (greedy_credit_ >= kGreedyCreditSuccess ? 2 : 1);
-    const size_t tries = std::min<size_t>((size_t)budget, cands.size());
-    std::partial_sort(cands.begin(), cands.begin() + (std::ptrdiff_t)tries, cands.end());
-    for (size_t c = 0; c < tries; ++c) {
+    static const bool predictor_on = [] {
+        const char* e = std::getenv("GLCORE_GREEDY_PREDICTOR");
+        return !(e && *e == '0');
+    }();
+    // Unsafe users of D_p = out(p) \ {a_phi} (see the comment above): users v != p of an arc a of D_p with a
+    // path of F_v ending at t that is not the path through a (paths end at distinct terminals: at most one).
+    auto count_unsafe_users = [&](int p, int t, int a_phi) -> int {
+        int unsafe = 0;
+        for (int a : g_.out_arcs(p)) {
+            if (a == a_phi) continue;
+            for (int v : oracle_.users_of_arc(a)) {
+                if (v == p) continue;
+                const VertexFlow& f = oracle_.flow(v);
+                for (size_t i = 0; i < f.paths.size(); ++i) {
+                    if (f.path_terminal[i] != t) continue;
+                    if (std::find(f.paths[i].begin(), f.paths[i].end(), a) == f.paths[i].end()) ++unsafe;
+                    break;
+                }
+            }
+        }
+        return unsafe;
+    };
+    struct Ranked {
+        int risky;      // 0: certain (every user safe), 1: some unsafe user
+        int failures;   // previous failed attempts (0 for certain candidates: irrelevant)
+        int64_t users;
+        int dsize, p;
+        bool operator<(const Ranked& o) const {
+            return std::tie(risky, failures, users, dsize, p) < std::tie(o.risky, o.failures, o.users, o.dsize, o.p);
+        }
+    };
+    const size_t pre = std::min<size_t>(predictor_on ? (size_t)kGreedyPreselect : (size_t)budget, cands.size());
+    std::partial_sort(cands.begin(), cands.begin() + (std::ptrdiff_t)pre, cands.end());
+    std::vector<Ranked> ranked;
+    ranked.reserve(pre);
+    for (size_t c = 0; c < pre; ++c) {
         const int p = cands[c].p;
         const int t = term_vertex_[phi_[p]];
         const int a_phi = g_.find_arc(p, t);
         if (a_phi < 0 || g_.out_degree(p) < 2) continue;  // stale score (cannot happen after a refresh)
+        if (!predictor_on) {
+            ranked.push_back(Ranked{0, 0, cands[c].users, cands[c].dsize, p});
+            continue;
+        }
+        const int unsafe = count_unsafe_users(p, t, a_phi);
+        if (unsafe > 0 && greedy_failures_[p] > kGreedyRiskyFailures) continue;  // veto (until it becomes certain)
+        ranked.push_back(Ranked{unsafe > 0 ? 1 : 0, unsafe > 0 ? greedy_failures_[p] : 0, cands[c].users, cands[c].dsize, p});
+    }
+    if (predictor_on) std::sort(ranked.begin(), ranked.end());
+    const size_t tries = std::min<size_t>((size_t)budget, ranked.size());
+    for (size_t c = 0; c < tries; ++c) {
+        const int p = ranked[c].p;
+        const int t = term_vertex_[phi_[p]];
+        const int a_phi = g_.find_arc(p, t);
+        if (a_phi < 0 || g_.out_degree(p) < 2) continue;
         ++stats_.greedy_attempts;
+        const int credit_before = greedy_credit_;
         greedy_credit_ -= kGreedyCreditAttempt;
         std::vector<int> D;
         std::vector<std::pair<int, int>> pairs;
@@ -480,8 +581,68 @@ bool GLSolver::step_greedy_contraction() {
                 D.push_back(a);
                 pairs.emplace_back(p, g_.arc(a).head);
             }
+        // ---- E4 instrumentation (GLCORE_GREEDY_LOG): cheap features of this attempt, see GreedyLog
+        std::FILE* glog = greedy_log();
+        std::string feat;
+        std::chrono::steady_clock::time_point eval_t0;
+        if (glog) {
+            int64_t users_total = 0, max_arc_users = 0, term_arcs = 0, users_on_term = 0, self_users = 0;
+            int64_t risky_simple = 0, risky_exact = 0, users_full = 0, users_tight = 0;
+            int min_head_indeg = -1;
+            std::vector<int> distinct;
+            for (int a : D) {
+                const int q = g_.arc(a).head;
+                const bool q_term = g_.is_terminal(q);
+                if (q_term) ++term_arcs;
+                const int hd = g_.in_degree(q);
+                if (min_head_indeg < 0 || hd < min_head_indeg) min_head_indeg = hd;
+                const std::vector<int> us = oracle_.users_of_arc(a);
+                users_total += (int64_t)us.size();
+                max_arc_users = std::max<int64_t>(max_arc_users, (int64_t)us.size());
+                for (int v : us) {
+                    if (v == p) { ++self_users; continue; }
+                    distinct.push_back(v);
+                    if (q_term) ++users_on_term;
+                    const VertexFlow& f = oracle_.flow(v);
+                    if (f.kappa == g_.k()) ++users_full;
+                    if (g_.out_degree(v) == f.kappa) ++users_tight;
+                    bool simple = false, exact = false;
+                    for (size_t i = 0; i < f.paths.size(); ++i) {
+                        if (f.path_terminal[i] != t) continue;
+                        simple = true;
+                        if (std::find(f.paths[i].begin(), f.paths[i].end(), a) == f.paths[i].end()) exact = true;
+                    }
+                    risky_simple += simple;
+                    risky_exact += exact;
+                }
+            }
+            std::sort(distinct.begin(), distinct.end());
+            distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
+            feat = vs(stats_.steps) + "," + vs(g_.num_live_nonterminals()) + "," + vs(g_.num_live_arcs()) + "," + vs(g_.k()) + "," +
+                   vs(credit_before) + "," + vs((int64_t)c) + "," + vs((int64_t)cands.size()) + "," + vs(p) + "," + vs(t) + "," +
+                   vs(greedy_failures_[p]) + "," + vs((int64_t)D.size()) + "," + vs(g_.out_degree(p)) + "," + vs(g_.in_degree(p)) + "," +
+                   vs(oracle_.kappa(p)) + "," + vs(users_total) + "," + vs((int64_t)distinct.size()) + "," + vs(max_arc_users) + "," +
+                   vs(term_arcs) + "," + vs(users_on_term) + "," + vs(risky_simple) + "," + vs(risky_exact) + "," + vs(users_full) + "," +
+                   vs(users_tight) + "," + vs(min_head_indeg) + "," + vs(self_users);
+            eval_t0 = std::chrono::steady_clock::now();
+        }
         std::vector<int> affected = oracle_.evaluate_deletion(D, scratch_slot_, false);
-        if (!deletion_keeps_witness(affected, scratch_slot_)) {
+        const bool keeps = deletion_keeps_witness(affected, scratch_slot_);
+        if (glog) {
+            const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - eval_t0).count();
+            int64_t dropped = 0, failing = 0;
+            for (int v : affected) {
+                if (!g_.live(v) || g_.is_terminal(v)) continue;
+                const VertexFlow& f = scratch_slot_[v];
+                if (f.kappa < oracle_.kappa(v)) {
+                    ++dropped;
+                    if (!f.ess.test(phi_[v])) ++failing;
+                }
+            }
+            std::fprintf(glog, "%s,%d,%lld,%lld,%lld,%.0f\n", feat.c_str(), keeps ? 1 : 0, (long long)affected.size(),
+                         (long long)dropped, (long long)failing, us);
+        }
+        if (!keeps) {
             const int f = ++greedy_failures_[p];
             greedy_skip_until_[p] = stats_.steps + std::min(kGreedyMaxBackoff, 1 << std::min(f, 6));
             if (greedy_credit_ <= 0) break;
@@ -588,7 +749,7 @@ void GLSolver::step_shift_assignment() {
         size_t best_users = 0;
         for (int a : g_.out_arcs(p)) {
             if (a == a_match) continue;
-            const size_t u = oracle_.users_of_arc(a).size();
+            const size_t u = oracle_.num_users_of_arc(a);
             if (best < 0 || u < best_users || (u == best_users && a < best)) {
                 best = a;
                 best_users = u;

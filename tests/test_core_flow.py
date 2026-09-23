@@ -494,3 +494,127 @@ def test_larger_random_sequences() -> None:
     for i in range(4):
         inst = random_undirected_instance(36, 5, rng)
         run_random_ops(inst, seed=i, threads=4, exact=bool(i % 2), steps=30)
+
+
+# ---------------------------------------------------------------------------
+# (g) exact user index, O(1) contraction translation, on-demand sides, worker pool (RESEARCH_NOTES E3)
+# ---------------------------------------------------------------------------
+def test_contraction_with_out_degree_two_on_flow_arcs() -> None:
+    """Graph.contract accepts d^+(p) >= 2 [Def 2.1]; a flow whose path leaves p by an arc other than (p, t)
+    cannot be translated (O3 needs d^+(p) = 1) and must be recomputed: kappa / paths / users stay exact."""
+    inst = generators.harary_graph(24, 4, seed=3)
+    g = core_graph(inst)
+    ref = ref_graph(inst)
+    o = EssentialOracle(g, 4, 0)
+    o.compute_all()
+    rng = random.Random(11)
+    done = 0
+    for _ in range(40):
+        cands = [p for p in g.pre_terminals() if g.out_degree(p) >= 2
+                 and sum(1 for x in g.out_neighbors(p) if g.is_terminal(x)) >= 2]
+        if not cands:
+            break
+        p = rng.choice(cands)
+        ts = [x for x in g.out_neighbors(p) if g.is_terminal(x)]
+        t = rng.choice(ts)
+        # some flow should pass through p and leave by another arc, otherwise the case is trivial
+        assert g.contract(p, t) == ref.contract(p, t)
+        o.after_contraction(p, t)
+        same_graph(g, ref)
+        oracle_matches_reference(inst, g, ref, o, exact=False)
+        users_consistent(g, ref, o)
+        done += 1
+    assert done >= 3
+    o.refresh_all_cuts()
+    oracle_matches_reference(inst, g, ref, o, exact=True)
+
+
+def test_long_path_contraction_sequence_keeps_index_exact() -> None:
+    """Harary paths are O(n/k) long: many contractions with O(1) translations, deletions and one terminal
+    removal; users_of_arc must equal the stored paths after every operation (exactly maintained index)."""
+    inst = generators.harary_graph(40, 4, seed=8)
+    g = core_graph(inst)
+    ref = ref_graph(inst)
+    o = EssentialOracle(g, 3, 0)
+    o.compute_all()
+    rng = random.Random(8)
+    contractions = 0
+    for step in range(60):
+        deg1 = [p for p in g.pre_terminals() if g.out_degree(p) == 1]
+        if deg1:
+            p = rng.choice(deg1)
+            (t,) = g.out_neighbors(p)
+            assert g.contract(p, t) == ref.contract(p, t)
+            o.after_contraction(p, t)
+            contractions += 1
+        else:
+            pts = g.pre_terminals()
+            if not pts:
+                break
+            p = rng.choice(pts)
+            keep = rng.choice([x for x in g.out_neighbors(p) if g.is_terminal(x)])
+            D = [(p, x) for x in g.out_neighbors(p) if x != keep]
+            o.evaluate_deletion(D, False)
+            o.commit_deletion(D)
+            for e in D:
+                ref.delete_arc(*e)
+        if step == 30 and g.k > 2:
+            t = rng.choice(list(ref.terminals))
+            g.remove_terminal(t)
+            ref.remove_terminal(t)
+            o.after_terminal_removal(t)
+        same_graph(g, ref)
+        oracle_matches_reference(inst, g, ref, o, exact=False)
+        users_consistent(g, ref, o)
+    assert contractions >= 10
+    o.refresh_all_cuts()
+    oracle_matches_reference(inst, g, ref, o, exact=True)
+
+
+def test_sides_on_demand_is_stable_and_side_effect_free() -> None:
+    """sides(v) is materialized by one reverse BFS (never stored): repeated calls agree with the reference,
+    and kappa / ess / paths / users are unchanged by the call."""
+    inst = POOL[9]
+    g = core_graph(inst)
+    ref = ref_graph(inst)
+    o = EssentialOracle(g, 2, 0)
+    o.compute_all()
+    u, w = sorted(ref.arcs())[3]
+    o.evaluate_deletion([(u, w)], False)
+    o.commit_deletion([(u, w)])
+    ref.delete_arc(u, w)
+    for v in ref.nonterminals():
+        before = (o.kappa(v), tuple(o.ess(v)), tuple(map(tuple, o.paths(v))), o.cut_exact(v))
+        s1 = o.sides(v)
+        s2 = o.sides(v)
+        assert s1 == s2
+        if before[3]:
+            assert s1 == tightest_min_cut(ref, v).side
+        else:
+            assert s1 == {}
+        assert (o.kappa(v), tuple(o.ess(v)), tuple(map(tuple, o.paths(v))), o.cut_exact(v)) == before
+    users_consistent(g, ref, o)
+    o.refresh_all_cuts()
+    for v in ref.nonterminals():
+        assert o.sides(v) == tightest_min_cut(ref, v).side
+
+
+def test_determinism_threads_1_vs_8_with_pool() -> None:
+    """Parallel regions of >= 8 items (terminal removals over all vertices, deletions of heavily used arcs)
+    run on the persistent worker pool; per-index slots keep the outcome independent of the thread count."""
+    inst = generators.random_regular_graph(48, 6, 4, seed=31)
+    t1, *_ = run_random_ops(inst, seed=3, threads=1, exact=False, steps=20, check_every=False)
+    t8, *_ = run_random_ops(inst, seed=3, threads=8, exact=False, steps=20, check_every=False)
+    assert t1 == t8
+    # heavily used arcs -> large affected sets; identical results across thread counts
+    g1, g8 = core_graph(inst), core_graph(inst)
+    o1, o8 = EssentialOracle(g1, 1, 0), EssentialOracle(g8, 8, 0)
+    o1.compute_all()
+    o8.compute_all()
+    arcs = sorted(inst.arcs, key=lambda e: -len(o1.users_of_arc(*e)))[:6]
+    assert len(o1.users_of_arc(*arcs[0])) >= 8
+    for e in arcs:
+        r1 = o1.evaluate_deletion([e], True)
+        r8 = o8.evaluate_deletion([e], True)
+        assert r1 == r8
+        assert all(o1.evaluated_paths(v) == o8.evaluated_paths(v) for v in r1)

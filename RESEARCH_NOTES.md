@@ -172,3 +172,134 @@ user index, which appends an entry for every arc of a changed flow and only comp
 length) entries. Greedy contraction (O5) succeeds in 67 % of attempts at n = 100 but only 32 % at n = 10⁴ on random regular
 graphs, so the exact ShiftAssignment fallback increasingly dominates there. These three items define the optimization stage.
 
+
+
+### E3. Oracle engineering: exact user index, O(1) contraction translation, worker pool (2026-09-22)
+
+Target: the two per-operation hotspots of E2 and the memory blow-up, without changing a single
+operation of the algorithm (every counter — `augment_calls`, `cut_calls`, `cycle_shifts`,
+`greedy_attempts` — is identical before and after on every instance below; the nine differential
+suites are green on the release build (1 909 passed, 16 skipped, four new oracle tests included) and
+under ASan+UBSan (the final code was re-checked under ASan+UBSan after the stage; see E3-verify).
+
+What changed (src/glcore/flow.*, essential.*, threadpool.hpp; call sites touched by two lines each):
+
+1. **Exact user index** (memory). `arc_users_[a]` / `vertex_users_[x]` used to be append-only lists of
+   `(v, stamp)` entries compacted lazily, so every change of a flow appended its whole path length
+   again: RSS ≈ (#flow changes) × (path length) = 7.9 GB at H_{4,1000}, 62 GB at H_{4,2000}. Now every
+   path arc `paths[i][j]` of a registered flow owns one registry entry `reg_[v][i][j] = {arc, slot in
+   arc_users_[arc], slot in vertex_users_[head]}` and the two lists hold back-references `(v, i, j)`.
+   Removing an entry is a swap-remove that patches the position stored by the entry moved into the
+   hole (O(1)); a flow is unregistered before any change and re-registered after, so the index holds
+   exactly the arcs of the valid flows: memory O(total live path length) at all times (3.29 M arcs ×
+   36 B ≈ 118 MB on H_{4,2000}). `num_users_of_arc(a)` is O(1) (the solvers' O1/O5/O6 scans used
+   `users_of_arc(a).size()`, an allocation + sort per arc).
+2. **O(1) contraction translation** (time). `after_contraction(p, t)` located the arc into `p` by
+   scanning every path of every flow through `p` (`O(Σ path lengths)`, 8–9 s of 12 s on H_{4,1000},
+   97 s of 129 s on H_{4,2000}). The vertex index now names the registry entry, i.e. the position
+   `(i, j)` of that arc; since `(p, t)` is the last arc of the path, the translation is
+   `paths[i][j] = (x, t); paths[i].pop_back()` plus two O(1) index removals and two appends. No path is
+   scanned; the flows through `p` are read off `vertex_users_[p]` alone.
+3. **Sides never stored.** `VertexFlow::side` (n bytes per flow, n² in total) is empty by default:
+   `compute_cut` derives |S| = #reached out-nodes − #reached in-nodes and Ess = {t : t_in unreached}
+   from the reverse BFS alone; `EssentialOracle::sides(v)` materializes the L/S/R labels on demand by
+   one reverse BFS (trace / record_cuts / the Python `sides()` diagnostic — same values: the tightest
+   cut is unique, [Def 3.8]).
+4. **Persistent worker pool** (`threadpool.hpp`). `run_parallel` used to spawn `std::thread`s per
+   region (one region per deletion evaluation: tens of thousands per run). A pool created lazily per
+   oracle and joined in its destructor is woken through a generation counter; the atomic work counter
+   and per-index result slots are unchanged, so results stay deterministic (asserted for 1 vs 4 and 1
+   vs 8 threads). 400 small evaluate_deletion regions on a random 8-regular graph: 0.38 s → 0.19 s.
+5. **Exact micro-optimizations in the flow engine.** (a) `next_arc[x]` (the flow arc leaving x) is
+   maintained by every flag change, so the path lists are rebuilt after an augmentation in
+   O(total path length) instead of scanning every out-list along the paths, and the flags are only
+   re-derived when the augmentation left flow on a cycle (detected by counting flow arcs);
+   (b) `remove_paths_using_arcs(D)` drops all paths through D in one pass (was |D| passes);
+   (c) the per-arc `flow` and `forbidden` flags share one byte array (one random access per arc in the
+   BFS loops instead of two). Same augmenting paths, same cuts: the counters are identical.
+
+Not done: an "early exit" of the reverse BFS is not possible when Ess is needed exactly — a terminal
+is essential iff its in-node is *not* reached, which only the complete search decides; and the
+remaining Harary cost is the 780 k warm-started augmentations (algorithmic, see E2/E4), not the
+oracle's bookkeeping.
+
+Measurements (general solver, 8 threads, `verify=False`, each run in its own subprocess reading
+`ru_maxrss`; medians of 3). The machine was shared with another agent's jobs throughout (load average
+4–10), so absolute times drift between columns; the decisive columns are the two *interleaved* A/B
+runs (HEAD core vs HEAD + this oracle, alternating run by run under the same load, both built from the
+same tree into separate directories), whose ratios are load-fair. "before, first run" is the HEAD core
+measured first (lightest load seen); "after, single-build run" is a separate 3-repeat run of the new
+oracle made before the last O(path-length) trim of flow.cpp (reset/remove passes), which the A/B
+columns include.
+
+| instance | metric | before, first run | after, single-build run | before (A/B, interleaved) | after (A/B, interleaved) | after / before (A/B) |
+|---|---|---:|---:|---:|---:|---:|
+| **Harary H_{4,1000} seed 2 (n=1000, m=3984, k=4)** | wall s | 12.95 | 3.15 | 16.52 | 3.16 | **0.19** |
+| | peak RSS MB | 7873 | 103 | 7896 | 102 | **0.0129** |
+| | after_contraction s | 9.211 | 0.084 | 11.917 | 0.089 | **0.0075** |
+| | evaluate_deletion s | 2.28 | 2.91 | 2.72 | 2.86 | 1.05 |
+| | augment / cut calls, cycle shifts | 780561 / 782129, 862 | same | same | same | identical |
+| **Harary H_{4,2000} seed 2 (n=2000, m=7984, k=4)** | wall s | 128.81 | 25.02 | 125.15 | 22.59 | **0.18** |
+| | peak RSS MB | 62344 | 255 | 62372 | 250 | **0.0040** |
+| | after_contraction s | 97.417 | 0.492 | 94.073 | 0.492 | **0.0052** |
+| | evaluate_deletion s | 19.59 | 23.88 | 20.10 | 21.42 | 1.07 |
+| | augment / cut calls, cycle shifts | 3105050 / 3108151, 1732 | same | same | same | identical |
+| **random 8-regular n=5000, k=8 (m=39936)** | wall s | 22.66 | 26.78 | 36.21 | 31.83 | **0.88** |
+| | peak RSS MB | 186 | 88 | 196 | 88 | **0.4497** |
+| | after_contraction s | 0.066 | 0.010 | 0.093 | 0.013 | **0.1430** |
+| | evaluate_deletion s | 21.18 | 25.11 | 33.87 | 30.27 | 0.89 |
+| | augment / cut calls, cycle shifts | 235214 / 125897, 1419 | same | same | same | identical |
+| **Erdős–Rényi n=2000, p=0.2, k=6 (m=797756)** | wall s | 3.78 | 2.94 | 4.09 | 2.88 | **0.70** |
+| | peak RSS MB | 358 | 300 | 309 | 300 | **0.9696** |
+| | after_contraction s | 0.017 | 0.015 | 0.022 | 0.015 | **0.6980** |
+| | evaluate_deletion s | 0.91 | 0.99 | 1.06 | 0.96 | 0.91 |
+| | augment / cut calls, cycle shifts | 6310 / 4858, 0 | same | same | same | identical |
+
+Reading the table: the two Harary hotspots are gone — `after_contraction` drops from 94 s to 0.49 s on
+H_{4,2000} (0.5 %) and peak memory from 62 GB to 250 MB (0.4 %; H_{4,1000}: 7.9 GB → 102 MB), both
+targets met (< 1 GB, < 0.5 s); what remains on Harary is `evaluate_deletion` (the 780 k / 3.1 M
+warm-started augmentations, ≈ 2.9 s / 21 s), i.e. the algorithmic item of E2/E4. The random-regular
+and Erdős–Rényi instances, which never suffered from the index, gain 12 % and 30 % from the worker
+pool, the O(1) user counts and the flow-engine micro-optimizations, at half (regular) or the same
+(ER) memory. The per-operation costs are now O(1) per affected flow for contraction and
+O(|D| + path length + n + m) per evaluated flow for deletion, with the index memory bounded by the
+live path length.
+
+Commands: `python /tmp/glbench/bench.py before 3 h1000 er2000 rr5000 h2000` (HEAD, first run),
+`BENCH_CORE_DIR=/tmp/glbench/mine/build python /tmp/glbench/bench.py after 3 …` (single-build run) and
+`python /tmp/glbench/ab.py ab2 3 h1000 rr5000 er2000 h2000` (interleaved; HEAD in /tmp/glbench/old/build
+vs HEAD + src/glcore/{flow,essential,threadpool} in /tmp/glbench/mine/build, both `cmake -DCMAKE_BUILD_TYPE=Release`,
+selected through `BENCH_CORE_DIR` which substitutes `glsolver._core`). Instances: `harary_graph(n, 4, seed=2)`,
+`random_regular_graph(5000, 8, 8, seed=2)`, `erdos_renyi_graph(2000, 0.2, 6, seed=2)`; run through
+`glpartition(inst, algorithm="general", threads=8, verify=False)`; `result.stats["time_seconds"]`
+keys `essential.after_contraction`, `essential.evaluate_deletion`, `essential.compute_all`.
+
+### E3-verify. Independent re-measurement of E3/E4 (2026-09-23, quiet machine)
+
+The optimization agents were interrupted by a usage limit before reporting; their code was kept only
+after it was re-verified from scratch. Whole suite on the release build: **2 585 passed, 16 skipped,
+0 failed** (`pytest -m "not slow" -n 12 --hypothesis-profile=ci tests`). Timings below are my own
+runs, each in a fresh subprocess reading `ru_maxrss`, 8 threads, `verify=False`, `algorithm="general"`
+(median of 3 for the first row, single runs otherwise), on an otherwise idle machine. The "before"
+column is E2 (the baseline sweep).
+
+| instance | before: time | after: time | before: peak RSS | after: peak RSS |
+|---|---:|---:|---:|---:|
+| Harary H_{4,1000} seed 2 | 12.0 s | **2.05 s** | 7 868 MB | **102 MB** |
+| Harary H_{4,2000} seed 2 | 129.5 s | **17.7 s** | 56 551 MB | **248 MB** |
+| random 4-regular n = 10 000 | 19.8 s | **15.4 s** | 232 MB | **102 MB** |
+| random 8-regular n = 5 000, k = 8 | 30–40 s | **17.0 s** | — | 88 MB |
+| Erdős–Rényi n = 10 000, m = 10⁷ | 226 s | **189 s** | 4 094 MB | **2 855 MB** |
+
+Speed-ups: 5.9× and 7.3× on the two Harary sizes, memory 77× and **228×**. The contraction
+translation is gone as a cost centre (8.3 s → 0.04 s at n = 1 000, 0.32 s at n = 2 000, i.e. from 69 %
+of the run to 2 %). On the 10⁷-arc instance the numpy path (E4) leaves only 2.6 s of the 189 s wall
+clock outside the core, so that instance is now genuinely core-bound.
+
+**The remaining bottleneck is now purely algorithmic**, exactly as E2 predicted: `evaluate_deletion`
+(the warm-started augmentations of O2) is 1.7 s of 2.05 s on H_{4,1000}, 15.3 s of 17.7 s on
+H_{4,2000}, 13.6 s of 15.4 s on random 4-regular n = 10 000, and 10.0 s of 12.1 s on sparse
+k-connected n = 10 000. The augmentation count itself is unchanged (778 k on H_{4,1000}), so the
+engineering stage removed every constant-factor obstacle and the open question is the one C1 states:
+can the stored flows be routed so that deletions touch fewer of them?
+

@@ -384,10 +384,12 @@ void GLWeightedSolver::trace_essential() {
         ess.add(v, termset_json(f.ess, term_vertex_));
         kappa.add(v, vs(f.kappa));
         if (opt_.record_cuts && f.cut_exact) {
+            std::vector<Side> side;
+            oracle_.sides(v, side);  // materialized on demand (one reverse BFS); never stored per flow
             std::vector<int> L, S, R;
             for (int x = 0; x < g_.n(); ++x) {
                 if (!g_.live(x)) continue;
-                (f.side[x] == Side::L ? L : (f.side[x] == Side::S ? S : R)).push_back(x);
+                (side[x] == Side::L ? L : (side[x] == Side::S ? S : R)).push_back(x);
             }
             cuts.add(v, JsonObject().raw("L", json_list(L)).raw("S", json_list(S)).raw("R", json_list(R)).build());
         }
@@ -743,7 +745,7 @@ void GLWeightedSolver::refresh_dirty_candidates() {
         int64_t users = 0;
         for (int a : g_.out_arcs(p)) {
             if (a == a_t) continue;
-            const size_t u = oracle_.users_of_arc(a).size();
+            const size_t u = oracle_.num_users_of_arc(a);
             users += (int64_t)u;
             if (u == 0 && opt_.batch_unused_arcs) batch_arcs_.push_back(a);
         }
@@ -946,7 +948,7 @@ bool GLWeightedSolver::step_matching_delete() {
         size_t best_users = 0;
         for (int a : g_.out_arcs(p)) {
             if (a == a_match) continue;
-            const size_t u = oracle_.users_of_arc(a).size();
+            const size_t u = oracle_.num_users_of_arc(a);
             if (best < 0 || u < best_users || (u == best_users && a < best)) {
                 best = a;
                 best_users = u;

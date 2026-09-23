@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "bindings.hpp"
+#include "bindings_arcs.hpp"
 #include "solver.hpp"
 #include "stats.hpp"
 #include "trace.hpp"
@@ -22,8 +23,6 @@ namespace py = pybind11;
 
 namespace glcore {
 namespace {
-
-using ArcList = std::vector<std::pair<int, int>>;
 
 // Stats -> dict (docs/api.md `stats` field; same layout as the general / DAG bindings).
 py::dict weighted_stats_to_dict(const Stats& s) {
@@ -108,7 +107,7 @@ SolverOptions parse_weighted_options(const py::dict& options) {
 void bind_solver_weighted(py::module_& m) {
     m.def(
         "solve_weighted",
-        [](int n, const ArcList& arcs, const std::vector<int>& terminals, const std::vector<int64_t>& capacities,
+        [](int n, const py::object& arcs_obj, const std::vector<int>& terminals, const std::vector<int64_t>& capacities,
            const std::vector<int64_t>& weights, const py::dict& options) {
             py::dict d;
             d["status"] = "error";
@@ -120,9 +119,13 @@ void bind_solver_weighted(py::module_& m) {
             d["stats"] = weighted_stats_to_dict(Stats{});
             d["trace"] = py::list();
             std::unique_ptr<GLWeightedSolver> solver;
+            ArcList arcs;
             try {
+                arcs = arcs_from_object(arcs_obj, "solve_weighted");  // numpy (m, 2) int array or (u, v) pairs
                 const SolverOptions opt = parse_weighted_options(options);  // malformed options -> status "error" too
                 solver = std::make_unique<GLWeightedSolver>(n, arcs, terminals, capacities, weights, opt);
+            } catch (const py::builtin_exception&) {
+                throw;  // TypeError / ValueError for a wrong arcs type or shape, as for any wrong argument type
             } catch (const std::exception& e) {
                 d["message"] = std::string(e.what());
                 return d;
@@ -156,7 +159,8 @@ void bind_solver_weighted(py::module_& m) {
         py::arg("n"), py::arg("arcs"), py::arg("terminals"), py::arg("capacities"), py::arg("weights"),
         py::arg("options") = py::dict(),
         "solve_weighted(n, arcs, terminals, capacities, weights, options={}) -> dict(status, message, assignment, parent, "
-        "witness, k_T_connected, stats, trace). GLWeightedPartition [Alg 3] + RoundAndRemove [Alg 4] + MinCostSplitAssignment "
+        "witness, k_T_connected, stats, trace). arcs: a numpy integer array of shape (m, 2) (int32 read in place) or a "
+        "sequence of (u, v) pairs. GLWeightedPartition [Alg 3] + RoundAndRemove [Alg 4] + MinCostSplitAssignment "
         "[Prop 5.4] with the exact optimizations O1–O9 (docs/optimizations.md); weights[v] >= 1 for non-terminals (terminal "
         "entries are ignored). options keys: threads, seed, greedy_contraction, lazy_shift, batch_unused_arcs, debug_asserts, "
         "trace, record_cuts, check_precondition. status is 'ok', 'precondition_failed' (FESAC fails; a partition may still "

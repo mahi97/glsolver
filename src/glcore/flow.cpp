@@ -3,7 +3,7 @@
 //
 // The network H_v of [Prop 4.2] is represented implicitly on top of the Graph:
 //   * split node x_in = 2x, x_out = 2x+1; the split arc (x_in,x_out) has capacity 1 (flag through[x]);
-//   * every graph arc (x,y) is the network arc (x_out, y_in) of capacity K > kappa (flag arc_flow[a] in {0,1});
+//   * every graph arc (x,y) is the network arc (x_out, y_in) of capacity K > kappa (flow bit of arc_bits[a]);
 //   * the source s feeds v_in with capacity K and v's split arc has capacity K, so v_in is never useful
 //     for an augmenting path (its only exits are v_out and back to s) and never reachable from the sink in
 //     a maximum flow (that would make s reachable). We therefore start every augmenting search at v_out,
@@ -14,6 +14,10 @@
 // touched (touched lists), so loading another VertexFlow costs O(size), never O(n+m). Visited marks use
 // generation stamps (O(1) reset). Forbidden arcs (a set D about to be deleted, O2/O5) are marked in a
 // per-scratch array for the duration of one search and treated as absent.
+// next_arc[x] is the flow arc leaving x (x != v has at most one by the unit split capacity), maintained by
+// every flag change, so that the explicit path lists are rebuilt in O(total path length) after an
+// augmentation instead of scanning every out-list along the paths; the flags are re-derived from the
+// rebuilt paths only when the augmentation left flow on a cycle (detected by counting flow arcs).
 #include "flow.hpp"
 
 #include <algorithm>
@@ -25,14 +29,18 @@ namespace glcore {
 
 struct FlowEngine::Scratch {
     int n = 0;
-    std::vector<char> arc_flow;               // per arc id: 1 iff the loaded flow uses the arc
-    std::vector<char> forbidden;              // per arc id: transient marks for one search
+    // Per arc id, one byte holding two bits: kFlow (the loaded flow uses the arc) and kForbidden (transient
+    // mark for one search). One array instead of two halves the random memory traffic of the BFS loops.
+    std::vector<unsigned char> arc_bits;
+    static constexpr unsigned char kFlow = 1, kForbidden = 2;
     std::vector<char> through;                // per vertex: 1 iff a loaded path passes through / ends at it
+    std::vector<int> next_arc;                // per vertex: the flow arc leaving it (-1 if none; unused for v)
     std::vector<uint32_t> stamp;              // per split node: visited iff stamp == gen
     uint32_t gen = 0;
     std::vector<int> parent_node, parent_arc; // BFS tree: predecessor node and the arc used (-1 = split move)
     std::vector<int> queue;
     std::vector<int> touched_arcs, touched_vertices;
+    int num_flow_arcs = 0;                    // arcs carrying the flow bit
     int loaded_v = -1;                        // source vertex of the flow currently loaded (-1 = none)
 
     bool visited(int node) const { return stamp[node] == gen; }
@@ -40,15 +48,17 @@ struct FlowEngine::Scratch {
     void next_gen() {
         if (++gen == 0) { std::fill(stamp.begin(), stamp.end(), 0u); gen = 1; }
     }
-    void set_arc(int a) { if (!arc_flow[a]) { arc_flow[a] = 1; touched_arcs.push_back(a); } }
-    void set_through(int x) { if (!through[x]) { through[x] = 1; touched_vertices.push_back(x); } }
-    void reset_flags() {
-        for (int a : touched_arcs) arc_flow[a] = 0;
-        for (int x : touched_vertices) through[x] = 0;
-        touched_arcs.clear();
-        touched_vertices.clear();
-        loaded_v = -1;
+    bool has_flow(int a) const { return (arc_bits[a] & kFlow) != 0; }
+    bool is_forbidden(int a) const { return (arc_bits[a] & kForbidden) != 0; }
+    void set_arc(int a, int tail) {
+        if (!has_flow(a)) { arc_bits[a] |= kFlow; touched_arcs.push_back(a); ++num_flow_arcs; }
+        next_arc[tail] = a;
     }
+    void clear_arc(int a, int tail) {
+        if (has_flow(a)) { arc_bits[a] &= (unsigned char)~kFlow; --num_flow_arcs; }
+        if (next_arc[tail] == a) next_arc[tail] = -1;
+    }
+    void set_through(int x) { if (!through[x]) { through[x] = 1; touched_vertices.push_back(x); } }
 };
 
 namespace {
@@ -65,11 +75,11 @@ FlowEngine::Scratch* FlowEngine::new_scratch() const {
     int n = g_.n();
     s->n = n;
     s->through.assign(n, 0);
+    s->next_arc.assign(n, -1);
     s->stamp.assign(2 * n, 0);
     s->parent_node.assign(2 * n, -1);
     s->parent_arc.assign(2 * n, -1);
-    s->arc_flow.assign(g_.num_arc_ids(), 0);
-    s->forbidden.assign(g_.num_arc_ids(), 0);
+    s->arc_bits.assign(g_.num_arc_ids(), 0);
     s->queue.reserve(2 * n);
     return s;
 }
@@ -80,82 +90,105 @@ namespace {
 // Arc ids grow with contractions: extend the per-arc arrays on demand (amortized O(1)).
 void ensure_arc_capacity(FlowEngine::Scratch& s, const Graph& g) {
     size_t m = (size_t)g.num_arc_ids();
-    if (s.arc_flow.size() < m) {
-        s.arc_flow.resize(m, 0);
-        s.forbidden.resize(m, 0);
+    if (s.arc_bits.size() < m) s.arc_bits.resize(m, 0);
+}
+
+// Clear every flag set since the last reset (O(touched)). Every vertex whose next_arc entry was set is the
+// loaded source or has had its through flag set (hence is in touched_vertices): a path arc's tail is v or
+// the head of the previous arc, and the augmentation sets an arc out of x only when x_out was reached from
+// x_in (the flip then sets through[x]) or through a flow arc leaving x (x already on a path). So next_arc
+// is reset through the touched-vertex list, without looking any arc up.
+void reset_flags(FlowEngine::Scratch& s) {
+    for (int a : s.touched_arcs) s.arc_bits[a] &= (unsigned char)~FlowEngine::Scratch::kFlow;
+    for (int x : s.touched_vertices) {
+        s.through[x] = 0;
+        s.next_arc[x] = -1;
     }
+    if (s.loaded_v >= 0) s.next_arc[s.loaded_v] = -1;
+    s.touched_arcs.clear();
+    s.touched_vertices.clear();
+    s.num_flow_arcs = 0;
+    s.loaded_v = -1;
 }
 
 void mark_forbidden(FlowEngine::Scratch& s, const std::vector<int>& D, const Graph& g) {
     for (int a : D) {
         if (a < 0 || a >= g.num_arc_ids()) throw std::invalid_argument("FlowEngine: forbidden arc id out of range");
-        s.forbidden[a] = 1;
+        s.arc_bits[a] |= FlowEngine::Scratch::kForbidden;
     }
 }
 void unmark_forbidden(FlowEngine::Scratch& s, const std::vector<int>& D) {
-    for (int a : D) s.forbidden[a] = 0;
+    for (int a : D) s.arc_bits[a] &= (unsigned char)~FlowEngine::Scratch::kForbidden;
 }
 
 void require_loaded(const FlowEngine::Scratch& s, const VertexFlow& f, const char* where) {
     if (s.loaded_v != f.v || f.v < 0)
         throw std::logic_error(std::string("FlowEngine::") + where + ": call load() for this flow first");
 }
+
+void set_path_flags(FlowEngine::Scratch& s, const VertexFlow& f, const Graph& g) {
+    const int m = g.num_arc_ids();
+    for (const auto& path : f.paths) {
+        for (int a : path) {
+            if (a < 0 || a >= m) throw std::logic_error("FlowEngine::load: bad arc id in path");
+            const Arc& e = g.arc(a);
+            s.set_arc(a, e.tail);
+            s.set_through(e.head);
+        }
+    }
+}
 }  // namespace
 
 // Set the scratch flags to exactly the paths of f (previous contents reset in O(size of previous)).
 void FlowEngine::load(const VertexFlow& f, Scratch& s) const {
-    s.reset_flags();
+    reset_flags(s);
     ensure_arc_capacity(s, g_);
     if (f.v < 0 || f.v >= g_.n()) throw std::invalid_argument("FlowEngine::load: flow has no source vertex");
-    for (const auto& path : f.paths) {
-        for (int a : path) {
-            if (a < 0 || a >= g_.num_arc_ids()) throw std::logic_error("FlowEngine::load: bad arc id in path");
-            s.set_arc(a);
-            s.set_through(g_.arc(a).head);
-        }
-    }
-    s.loaded_v = f.v;
+    s.loaded_v = f.v;  // before the flags: reset_flags clears next_arc of the loaded source
+    set_path_flags(s, f, g_);
 }
 
 // Rebuild the explicit path list of f from the flag state after an augmentation: from v follow, at every
-// vertex, its unique out-arc with flow 1 until a terminal. Flow conservation with unit split capacities
-// guarantees uniqueness; any flow left on cycles (not reachable from v) is discarded by re-setting the
-// flags from the rebuilt paths, which keeps the same value. Paths come out vertex-disjoint and end at
-// distinct terminals [Def 3.2]; verified under GLCORE_DEBUG_ASSERTS.
+// vertex, its unique out-arc with flow 1 (next_arc) until a terminal. Flow conservation with unit split
+// capacities guarantees uniqueness; any flow left on cycles (not reachable from v) is detected by comparing
+// the total path length with the number of flow arcs and discarded by re-setting the flags from the
+// rebuilt paths, which keeps the same value. Paths come out vertex-disjoint and end at distinct terminals
+// [Def 3.2]; verified under GLCORE_DEBUG_ASSERTS.
 void FlowEngine::rebuild_paths(VertexFlow& f, Scratch& s) const {
     const int v = f.v;
-    f.paths.clear();
+    size_t np = 0;
+    size_t total = 0;
     f.path_terminal.clear();
     for (int a0 : g_.out_arcs(v)) {
-        if (!s.arc_flow[a0]) continue;
-        std::vector<int> path;
+        if (!s.has_flow(a0)) continue;
+        if (np == f.paths.size()) f.paths.emplace_back();
+        std::vector<int>& path = f.paths[np++];
+        path.clear();
         path.push_back(a0);
         int x = g_.arc(a0).head;
         int steps = 0;
         while (!g_.is_terminal(x)) {
-            int nxt = -1;
-            for (int b : g_.out_arcs(x)) {
-                if (!s.arc_flow[b]) continue;
-                if (nxt >= 0) throw std::logic_error("FlowEngine: two flow arcs leave vertex " + std::to_string(x));
-                nxt = b;
-            }
-            if (nxt < 0) throw std::logic_error("FlowEngine: flow conservation violated at vertex " + std::to_string(x));
+            const int nxt = s.next_arc[x];
+            if (nxt < 0 || !s.has_flow(nxt) || g_.arc(nxt).tail != x)
+                throw std::logic_error("FlowEngine: flow conservation violated at vertex " + std::to_string(x));
             path.push_back(nxt);
             x = g_.arc(nxt).head;
             if (++steps > g_.n()) throw std::logic_error("FlowEngine: cycle while walking flow paths");
         }
-        f.paths.push_back(std::move(path));
+        total += path.size();
         f.path_terminal.push_back(x);
     }
+    f.paths.resize(np);  // keeps the capacity of the surviving path vectors
     if ((int)f.paths.size() != f.kappa)
         throw std::logic_error("FlowEngine: path count " + std::to_string(f.paths.size()) + " != kappa " +
                                std::to_string(f.kappa));
-    // Re-derive the flags from the paths (drops cycle flow, keeps touched lists tight).
-    int lv = s.loaded_v;
-    s.reset_flags();
-    for (const auto& path : f.paths)
-        for (int a : path) { s.set_arc(a); s.set_through(g_.arc(a).head); }
-    s.loaded_v = lv;
+    // Flow on a cycle (unreachable from v): re-derive the flags from the paths, which drops it.
+    if ((int)total != s.num_flow_arcs) {
+        const int lv = s.loaded_v;
+        reset_flags(s);
+        s.loaded_v = lv;
+        set_path_flags(s, f, g_);
+    }
 #ifdef GLCORE_DEBUG_ASSERTS
     {
         std::vector<char> seen(g_.n(), 0);
@@ -166,6 +199,19 @@ void FlowEngine::rebuild_paths(VertexFlow& f, Scratch& s) const {
                 seen[y] = 1;
             }
             if (!g_.is_terminal(f.path_terminal[i])) throw std::logic_error("FlowEngine: path does not end at a terminal");
+        }
+        // every vertex other than v has at most one flow arc leaving it, and the flags match the paths
+        int flow_arcs = 0;
+        for (int a = 0; a < g_.num_arc_ids(); ++a) flow_arcs += s.has_flow(a) ? 1 : 0;
+        if (flow_arcs != (int)total || flow_arcs != s.num_flow_arcs)
+            throw std::logic_error("FlowEngine: flag state does not match the rebuilt paths");
+        for (int x = 0; x < g_.n(); ++x) {
+            if (x == v || !g_.live(x)) continue;
+            int cnt = 0;
+            for (int b : g_.out_arcs(x)) cnt += s.has_flow(b) ? 1 : 0;
+            if (cnt > 1) throw std::logic_error("FlowEngine: two flow arcs leave vertex " + std::to_string(x));
+            if (cnt == 1 && (s.next_arc[x] < 0 || !s.has_flow(s.next_arc[x])))
+                throw std::logic_error("FlowEngine: next_arc out of sync at vertex " + std::to_string(x));
         }
     }
 #endif
@@ -194,7 +240,7 @@ bool FlowEngine::augment_once(VertexFlow& f, Scratch& s, const std::vector<int>&
         const int x = node_vertex(node);
         if (node_is_out(node)) {
             for (int a : g_.out_arcs(x)) {
-                if (s.forbidden[a] || s.arc_flow[a]) continue;
+                if (s.arc_bits[a]) continue;  // flow 1 (dead end) or forbidden
                 const int y = g_.arc(a).head;
                 if (y == v) continue;  // never route flow into the source
                 const int yin = node_in(y);
@@ -214,7 +260,7 @@ bool FlowEngine::augment_once(VertexFlow& f, Scratch& s, const std::vector<int>&
                 if (!s.visited(xout)) { s.mark(xout, node, -1); s.queue.push_back(xout); }
             } else {
                 for (int a : g_.in_arcs(x)) {
-                    if (!s.arc_flow[a] || s.forbidden[a]) continue;
+                    if (s.arc_bits[a] != FlowEngine::Scratch::kFlow) continue;  // needs flow 1 and not forbidden
                     const int wout = node_out(g_.arc(a).tail);
                     if (!s.visited(wout)) { s.mark(wout, node, a); s.queue.push_back(wout); }
                 }
@@ -223,14 +269,16 @@ bool FlowEngine::augment_once(VertexFlow& f, Scratch& s, const std::vector<int>&
     }
     unmark_forbidden(s, forbidden);
     if (target < 0) return false;
-    // Augment: flip the flags along the tree path target -> src.
+    // Augment: flip the flags along the tree path target -> src. next_arc is kept consistent in either
+    // order of "set the new out-arc" / "clear the old out-arc" of a vertex (clear_arc only resets it when it
+    // still names the cleared arc).
     for (int node = target; node != src;) {
         const int pn = s.parent_node[node];
         const int pa = s.parent_arc[node];
         const int x = node_vertex(node);
         if (pa >= 0) {
-            if (!node_is_out(node)) s.set_arc(pa);   // forward arc x_out -> y_in
-            else s.arc_flow[pa] = 0;                 // reverse arc x_in -> w_out
+            if (!node_is_out(node)) s.set_arc(pa, g_.arc(pa).tail);    // forward arc x_out -> y_in
+            else s.clear_arc(pa, g_.arc(pa).tail);                    // reverse arc x_in -> w_out
         } else {
             if (node_is_out(node)) s.set_through(x); // forward split x_in -> x_out
             else s.through[x] = 0;                   // reverse split x_out -> x_in
@@ -244,20 +292,24 @@ bool FlowEngine::augment_once(VertexFlow& f, Scratch& s, const std::vector<int>&
 }
 
 // [Prop 4.2] kappa_G(v) and, optionally, the tightest minimum cut, from scratch: at most k augmentations.
-void FlowEngine::compute_max_flow(int v, VertexFlow& f, Scratch& s, bool compute_cut_) const {
+void FlowEngine::compute_max_flow(int v, VertexFlow& f, Scratch& s, bool compute_cut_, bool with_sides) const {
     if (v < 0 || v >= g_.n() || !g_.live(v) || g_.is_terminal(v))
         throw std::invalid_argument("FlowEngine::compute_max_flow: " + std::to_string(v) + " is not a live non-terminal");
-    f = VertexFlow{};
     f.v = v;
+    f.kappa = 0;
     f.version = g_.version();
+    f.paths.clear();
+    f.path_terminal.clear();
     f.ess = TermSet(g_.k0());
+    f.cut_exact = false;
+    f.side.clear();
     load(f, s);
     static const std::vector<int> none;
     int guard = 0;
     while (augment_once(f, s, none)) {
         if (++guard > g_.k()) throw std::logic_error("FlowEngine: more augmentations than terminals");
     }
-    if (compute_cut_) compute_cut(f, s, none);
+    if (compute_cut_) compute_cut(f, s, none, with_sides);
 }
 
 // [Prop 4.2] tightest minimum cut from a maximum flow: Reach = split nodes that can reach z in the residual
@@ -267,7 +319,10 @@ void FlowEngine::compute_max_flow(int v, VertexFlow& f, Scratch& s, bool compute
 //                   in-arc (x,y) (capacity K is never saturated).
 // Sides: L if x_in reached, S if only x_out reached, R otherwise; v is R (v_out reachable would make s
 // reachable, contradicting maximality — we check this and throw), |S| = kappa, T ⊆ L ∪ S. Ess = T ∩ S [Lem 4.1].
-void FlowEngine::compute_cut(VertexFlow& f, Scratch& s, const std::vector<int>& forbidden) const {
+// x_in reached implies x_out reached (x_in is only entered through a flow arc, whose head has through == 1,
+// or from x_out itself), so |S| = #reached out-nodes − #reached in-nodes and the side of every vertex is
+// only materialized on request (with_sides).
+void FlowEngine::compute_cut(VertexFlow& f, Scratch& s, const std::vector<int>& forbidden, bool with_sides) const {
     require_loaded(s, f, "compute_cut");
     ensure_arc_capacity(s, g_);
     const int v = f.v;
@@ -290,7 +345,7 @@ void FlowEngine::compute_cut(VertexFlow& f, Scratch& s, const std::vector<int>& 
                 if (!s.visited(xin)) { s.mark(xin, node, -1); s.queue.push_back(xin); }
             }
             for (int a : g_.out_arcs(x)) {
-                if (!s.arc_flow[a] || s.forbidden[a]) continue;
+                if (s.arc_bits[a] != FlowEngine::Scratch::kFlow) continue;  // flow 1 and not forbidden
                 const int win = node_in(g_.arc(a).head);
                 if (!s.visited(win)) { s.mark(win, node, a); s.queue.push_back(win); }
             }
@@ -300,7 +355,7 @@ void FlowEngine::compute_cut(VertexFlow& f, Scratch& s, const std::vector<int>& 
                 if (!s.visited(xout)) { s.mark(xout, node, -1); s.queue.push_back(xout); }
             }
             for (int a : g_.in_arcs(x)) {
-                if (s.forbidden[a]) continue;
+                if (s.is_forbidden(a)) continue;
                 const int w = g_.arc(a).tail;
                 if (w == v) { not_max = true; continue; }
                 const int wout = node_out(w);
@@ -312,26 +367,37 @@ void FlowEngine::compute_cut(VertexFlow& f, Scratch& s, const std::vector<int>& 
     if (not_max)
         throw std::logic_error("FlowEngine::compute_cut: the flow of vertex " + std::to_string(v) +
                                " is not maximum (an out-neighbour's in-node reaches the sink)");
-    f.side.assign(n, Side::R);
-    int cnt_s = 0;
-    for (int x = 0; x < n; ++x) {
-        if (!g_.live(x)) continue;
-        const bool rin = s.visited(node_in(x)), rout = s.visited(node_out(x));
-        if (rin) {
-            if (!rout) throw std::logic_error("FlowEngine::compute_cut: x_in reached but x_out not [Prop 4.2]");
-            f.side[x] = Side::L;
-        } else if (rout) {
-            f.side[x] = Side::S;
-            ++cnt_s;
-        }
+    // The queue holds exactly the reached nodes (every mark is followed by a push).
+    int cnt_in = 0, cnt_out = 0;
+    for (int node : s.queue) {
+        if (node_is_out(node)) ++cnt_out; else ++cnt_in;
     }
+    const int cnt_s = cnt_out - cnt_in;
     if (cnt_s != f.kappa)
         throw std::logic_error("FlowEngine::compute_cut: |S| = " + std::to_string(cnt_s) + " != kappa = " +
                                std::to_string(f.kappa) + " for vertex " + std::to_string(v));
-    f.ess = TermSet(g_.k0());
+    if (f.ess.k != g_.k0() || f.ess.w.size() != (size_t)((g_.k0() + 63) / 64)) f.ess = TermSet(g_.k0());
+    else std::fill(f.ess.w.begin(), f.ess.w.end(), 0u);
     for (int t : g_.terminals()) {
-        if (f.side[t] == Side::R) throw std::logic_error("FlowEngine::compute_cut: terminal on the R side");
-        if (f.side[t] == Side::S) f.ess.set(g_.terminal_index(t));
+        // t_out is a BFS root; t is essential iff t_in is not reached (t ∈ S) [Lem 4.1]
+        if (!s.visited(node_in(t))) f.ess.set(g_.terminal_index(t));
+    }
+    if (with_sides) {
+        f.side.assign(n, Side::R);
+        for (int x = 0; x < n; ++x) {
+            if (!g_.live(x)) continue;
+            const bool rin = s.visited(node_in(x)), rout = s.visited(node_out(x));
+            if (rin) {
+                if (!rout) throw std::logic_error("FlowEngine::compute_cut: x_in reached but x_out not [Prop 4.2]");
+                f.side[x] = Side::L;
+            } else if (rout) {
+                f.side[x] = Side::S;
+            }
+        }
+        for (int t : g_.terminals())
+            if (f.side[t] == Side::R) throw std::logic_error("FlowEngine::compute_cut: terminal on the R side");
+    } else {
+        f.side.clear();
     }
     f.cut_exact = true;
 }
@@ -339,8 +405,9 @@ void FlowEngine::compute_cut(VertexFlow& f, Scratch& s, const std::vector<int>& 
 // Clear the flags of path i and drop it from f (O(length)).
 void FlowEngine::remove_path(VertexFlow& f, size_t i, Scratch& s) const {
     for (int a : f.paths[i]) {
-        s.arc_flow[a] = 0;
-        s.through[g_.arc(a).head] = 0;
+        const Arc& e = g_.arc(a);
+        s.clear_arc(a, e.tail);
+        s.through[e.head] = 0;
     }
     f.paths.erase(f.paths.begin() + (std::ptrdiff_t)i);
     f.path_terminal.erase(f.path_terminal.begin() + (std::ptrdiff_t)i);
@@ -355,6 +422,56 @@ bool FlowEngine::remove_path_using_arc(VertexFlow& f, int a, Scratch& s) const {
         for (int b : f.paths[i])
             if (b == a) { remove_path(f, i, s); return true; }
     return false;
+}
+
+// O2/O5: one pass over the paths with D marked in the forbidden array; the surviving paths keep their order
+// (identical to removing the paths one arc of D at a time).
+int FlowEngine::remove_paths_using_arcs(VertexFlow& f, const std::vector<int>& D, Scratch& s) const {
+    require_loaded(s, f, "remove_paths_using_arcs");
+    ensure_arc_capacity(s, g_);
+    // A small D (the common O5/O6 case) is compared directly, a sequential scan of the path vectors; a
+    // large one (dense graphs, |D| = d^+(p) - 1) is marked in the scratch bits.
+    const bool small = D.size() <= 4;
+    if (!small) mark_forbidden(s, D, g_);
+    else
+        for (int a : D)
+            if (a < 0 || a >= g_.num_arc_ids()) throw std::invalid_argument("FlowEngine: forbidden arc id out of range");
+    int removed = 0;
+    size_t w = 0;
+    for (size_t i = 0; i < f.paths.size(); ++i) {
+        bool hit = false;
+        if (small) {
+            for (int b : f.paths[i]) {
+                for (int a : D)
+                    if (b == a) { hit = true; break; }
+                if (hit) break;
+            }
+        } else {
+            for (int b : f.paths[i])
+                if (s.is_forbidden(b)) { hit = true; break; }
+        }
+        if (hit) {
+            for (int a : f.paths[i]) {
+                const Arc& e = g_.arc(a);
+                s.clear_arc(a, e.tail);
+                s.through[e.head] = 0;
+            }
+            ++removed;
+            continue;
+        }
+        if (w != i) {
+            f.paths[w].swap(f.paths[i]);
+            f.path_terminal[w] = f.path_terminal[i];
+        }
+        ++w;
+    }
+    if (!small) unmark_forbidden(s, D);
+    if (removed) {
+        f.paths.resize(w);
+        f.path_terminal.resize(w);
+        f.kappa -= removed;
+    }
+    return removed;
 }
 
 // O4: drop the path ending at terminal t (at most one).
@@ -373,15 +490,22 @@ bool FlowEngine::uses_arc(const VertexFlow& f, int a) {
     return false;
 }
 
+namespace {
+// Position (i, j) of the arc entering p on a path of f, or false if no path passes through p.
+bool find_entry(const Graph& g, const VertexFlow& f, int p, size_t& i, size_t& j) {
+    for (i = 0; i < f.paths.size(); ++i)
+        for (j = 0; j < f.paths[i].size(); ++j)
+            if (g.arc(f.paths[i][j]).head == p) return true;
+    return false;
+}
+}  // namespace
+
 bool FlowEngine::can_translate_after_contraction(const VertexFlow& f, int p, int t) const {
     if (f.v == p) return false;
-    for (const auto& path : f.paths) {
-        for (size_t j = 0; j < path.size(); ++j) {
-            if (g_.arc(path[j]).head != p) continue;
-            return j + 1 < path.size() && g_.arc(path[j + 1]).head == t;
-        }
-    }
-    return true;  // no path through p: nothing to translate
+    size_t i, j;
+    if (!find_entry(g_, f, p, i, j)) return true;  // no path through p: nothing to translate
+    const auto& path = f.paths[i];
+    return j + 2 == path.size() && g_.arc(path[j + 1]).head == t;
 }
 
 // O3: after Graph::contract(p, t) the path ... x -(x,p)-> p -(p,t)-> t of f (if any) becomes ... x -(x,t)-> t,
@@ -390,24 +514,29 @@ bool FlowEngine::can_translate_after_contraction(const VertexFlow& f, int p, int
 // dead) and the call is a no-op: callers drop it.
 void FlowEngine::translate_after_contraction(VertexFlow& f, int p, int t) const {
     if (f.v == p) return;
-    for (size_t i = 0; i < f.paths.size(); ++i) {
-        auto& path = f.paths[i];
-        for (size_t j = 0; j < path.size(); ++j) {
-            if (g_.arc(path[j]).head != p) continue;
-            if (j + 1 >= path.size() || g_.arc(path[j + 1]).head != t)
-                throw std::logic_error("FlowEngine::translate_after_contraction: the path through " + std::to_string(p) +
-                                       " does not continue to " + std::to_string(t) + " (contraction requires d^+(p) = 1 on flow arcs)");
-            const int x = g_.arc(path[j]).tail;
-            const int a_new = g_.find_arc(x, t);
-            if (a_new < 0)
-                throw std::logic_error("FlowEngine::translate_after_contraction: redirected arc (" + std::to_string(x) + "," +
-                                       std::to_string(t) + ") not found");
-            path[j] = a_new;
-            path.erase(path.begin() + (std::ptrdiff_t)j + 1);
-            if (f.path_terminal[i] != t) throw std::logic_error("FlowEngine::translate_after_contraction: path terminal mismatch");
-            return;  // paths are vertex-disjoint: at most one passes through p
-        }
-    }
+    size_t i, j;
+    if (!find_entry(g_, f, p, i, j)) return;  // paths are vertex-disjoint: at most one passes through p
+    if (!translate_path_after_contraction(f, i, j, p, t))
+        throw std::logic_error("FlowEngine::translate_after_contraction: the path through " + std::to_string(p) +
+                               " does not continue to " + std::to_string(t) + " (contraction requires d^+(p) = 1 on flow arcs)");
+}
+
+bool FlowEngine::translate_path_after_contraction(VertexFlow& f, size_t i, size_t j, int p, int t) const {
+    if (f.v == p) return false;
+    if (i >= f.paths.size() || j >= f.paths[i].size() || g_.arc(f.paths[i][j]).head != p)
+        throw std::logic_error("FlowEngine::translate_path_after_contraction: position (" + std::to_string(i) + "," +
+                               std::to_string(j) + ") of the flow of " + std::to_string(f.v) + " does not enter " + std::to_string(p));
+    std::vector<int>& path = f.paths[i];
+    if (j + 2 != path.size() || g_.arc(path[j + 1]).head != t) return false;
+    const int x = g_.arc(path[j]).tail;
+    const int a_new = g_.find_arc(x, t);
+    if (a_new < 0)
+        throw std::logic_error("FlowEngine::translate_path_after_contraction: redirected arc (" + std::to_string(x) + "," +
+                               std::to_string(t) + ") not found");
+    if (f.path_terminal[i] != t) throw std::logic_error("FlowEngine::translate_path_after_contraction: path terminal mismatch");
+    path[j] = a_new;
+    path.pop_back();
+    return true;
 }
 
 }  // namespace glcore

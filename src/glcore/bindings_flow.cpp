@@ -61,12 +61,13 @@ py::list paths_as_vertices(const Graph& g, const VertexFlow& f) {
     return out;
 }
 
-py::dict sides_dict(const Graph& g, const VertexFlow& f) {
+// side[] is materialized on demand (FlowEngine::compute_cut with_sides / EssentialOracle::sides); empty = no cut
+py::dict sides_dict(const Graph& g, const std::vector<Side>& side) {
     py::dict d;
-    if (!f.cut_exact) return d;
+    if (side.size() < (size_t)g.n()) return d;
     for (int x = 0; x < g.n(); ++x) {
         if (!g.live(x)) continue;
-        const char* s = f.side[x] == Side::L ? "L" : (f.side[x] == Side::S ? "S" : "R");
+        const char* s = side[x] == Side::L ? "L" : (side[x] == Side::S ? "S" : "R");
         d[py::int_(x)] = py::str(s);
     }
     return d;
@@ -190,9 +191,9 @@ void bind_graph_flow(py::module_& m) {
             py::gil_scoped_release release;
             FlowEngine engine(g);
             auto s = engine.make_scratch();
-            engine.compute_max_flow(v, f, *s, true);
+            engine.compute_max_flow(v, f, *s, true, true);
         }
-        return py::make_tuple(f.kappa, sides_dict(g, f), f.ess.to_list(), paths_as_vertices(g, f));
+        return py::make_tuple(f.kappa, sides_dict(g, f.side), f.ess.to_list(), paths_as_vertices(g, f));
     }, py::arg("graph"), py::arg("v"));
 
     py::class_<PyEssentialOracle>(m, "EssentialOracle",
@@ -206,7 +207,13 @@ void bind_graph_flow(py::module_& m) {
         .def("kappa", [](PyEssentialOracle& o, int v) { return o.oracle.kappa(v); })
         .def("ess", [](PyEssentialOracle& o, int v) { return o.oracle.ess(v).to_list(); })
         .def("cut_exact", [](PyEssentialOracle& o, int v) { return o.oracle.flow(v).cut_exact; })
-        .def("sides", [](PyEssentialOracle& o, int v) { return sides_dict(o.g, o.oracle.flow(v)); })
+        .def("sides", [](PyEssentialOracle& o, int v) {
+            // {} unless the stored cut is exact; the sides are then computed by one reverse BFS (never stored)
+            if (!o.oracle.flow(v).cut_exact) return py::dict();
+            std::vector<Side> side;
+            o.oracle.sides(v, side);
+            return sides_dict(o.g, side);
+        })
         .def("paths", [](PyEssentialOracle& o, int v) { return paths_as_vertices(o.g, o.oracle.flow(v)); })
         .def("path_arcs", [](PyEssentialOracle& o, int v) { return o.oracle.flow(v).paths; })
         .def("flow_version", [](PyEssentialOracle& o, int v) { return o.oracle.flow(v).version; })

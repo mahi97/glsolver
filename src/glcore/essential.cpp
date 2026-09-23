@@ -10,22 +10,29 @@
 // "all unaffected flows stay valid" (O1, O3) an O(1) statement instead of an O(n) version bump per commit.
 // The per-flow `version` field is refreshed on access and is informational.
 //
-// Indices. arc_users_[a] and vertex_users_[x] hold (v, stamp) entries; an entry is live iff
-// flow_stamp_[v] == stamp and v's flow is current. index_users(v) bumps the stamp and appends the entries
-// of the new paths; stale entries are compacted away when a list is read. Both indices cost O(total path
-// length) — never O(n) per query.
+// User index (exact). arc_users_[a] lists the flows whose paths use arc a and vertex_users_[x] the flows
+// whose paths enter x, as back-references (v, i, j) to the registry entry reg_[v][i][j] of paths[i][j]; the
+// entry stores the arc id and the positions of its two references. A flow is registered exactly while it
+// is valid: every transition that replaces or drops a flow's paths first unregisters it — each of its
+// entries is a swap-remove from the two lists in O(1), patching the position stored by the entry that was
+// moved into the hole — so the index holds exactly the arcs of the valid flows and its memory is O(total
+// live path length) at all times (the previous append-only index with lazy compaction grew by the whole
+// path length of a flow at every change: RESEARCH_NOTES E2). A contraction (O3) rewrites the last two arcs
+// of the path through p in place, so its index update is O(1) per affected flow as well; the flows through
+// p are read off vertex_users_[p] without touching any other flow.
 //
-// Parallelism (O8): std::thread workers with an atomic work counter; every worker owns one FlowEngine
-// Scratch and writes only per-vertex slots, so results are deterministic regardless of the thread count;
-// sequential post-processing runs in increasing vertex order. Stats counters are accumulated per worker.
+// Cut sides are never stored: compute_cut yields kappa / Ess from the reverse BFS alone and the L/S/R
+// labels of all n vertices are materialized only by sides() (trace / record_cuts / diagnostics).
+//
+// Parallelism (O8): a persistent WorkerPool (created lazily, joined by the destructor) with an atomic work
+// counter; every worker owns one FlowEngine Scratch and writes only per-vertex slots, so results are
+// deterministic regardless of the thread count; sequential post-processing runs in increasing vertex
+// order. Stats counters are accumulated per worker.
 #include "essential.hpp"
 
 #include <algorithm>
-#include <atomic>
-#include <mutex>
 #include <stdexcept>
 #include <string>
-#include <thread>
 
 #include "stats.hpp"
 
@@ -39,8 +46,8 @@ std::string vstr(int v) { return std::to_string(v); }
 
 EssentialOracle::EssentialOracle(Graph& g, Stats& stats, int threads, int seed)
     : g_(g), stats_(stats), threads_(threads < 1 ? 1 : threads), seed_(seed), engine_(g),
-      flows_(g.n()), arc_users_(g.num_arc_ids()), flow_stamp_(g.n(), 0), valid_(g.n(), 0),
-      synced_version_(g.version()), vertex_users_(g.n()), cut_epoch_(g.n(), 0) {}
+      flows_(g.n()), reg_(g.n()), arc_users_(g.num_arc_ids()), vertex_users_(g.n()), valid_(g.n(), 0),
+      synced_version_(g.version()), cut_epoch_(g.n(), 0) {}
 
 // ---------------------------------------------------------------------------------------------- helpers
 
@@ -64,88 +71,110 @@ bool EssentialOracle::expect_mutations(uint64_t count) {
     return ok;
 }
 
-// Static work distribution would be unbalanced (flows differ in cost): workers grab indices from an atomic
-// counter; the callback writes only into the slot of its index. Exceptions are captured and rethrown.
+// Static work distribution would be unbalanced (flows differ in cost): workers grab indices from the pool's
+// atomic counter; the callback writes only into the slot of its index. Exceptions are rethrown here.
 void EssentialOracle::run_parallel(size_t count, const std::function<void(size_t, int)>& fn) {
     if (count == 0) return;
     int nt = (int)std::min<size_t>((size_t)threads_, (count + 3) / 4);  // >= 4 items per thread
     if (nt < 1) nt = 1;
     scratch(nt - 1);  // allocate all workspaces up front (never inside the parallel region)
-    if (nt == 1) {
-        for (size_t i = 0; i < count; ++i) fn(i, 0);
-        return;
-    }
-    std::atomic<size_t> next{0};
-    std::atomic<bool> failed{false};
-    std::mutex err_mutex;
-    std::string err;
-    auto worker = [&](int w) {
-        try {
-            for (;;) {
-                if (failed.load(std::memory_order_relaxed)) break;
-                size_t i = next.fetch_add(1, std::memory_order_relaxed);
-                if (i >= count) break;
-                fn(i, w);
-            }
-        } catch (const std::exception& e) {
-            std::lock_guard<std::mutex> lock(err_mutex);
-            if (!failed.exchange(true)) err = e.what();
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(err_mutex);
-            if (!failed.exchange(true)) err = "unknown exception in worker thread";
-        }
-    };
-    std::vector<std::thread> pool;
-    pool.reserve(nt - 1);
-    for (int w = 1; w < nt; ++w) pool.emplace_back(worker, w);
-    worker(0);
-    for (auto& th : pool) th.join();
-    if (failed) throw std::runtime_error("EssentialOracle parallel region failed: " + err);
+    pool_.run(count, nt, fn);
 }
 
-// Record the arcs and vertices of v's current paths under a fresh stamp.
-void EssentialOracle::index_users(int v) {
+// ------------------------------------------------------------------------------------------ user index
+
+void EssentialOracle::ensure_arc_index_size() {
     if (arc_users_.size() < (size_t)g_.num_arc_ids()) arc_users_.resize(g_.num_arc_ids());
-    const uint64_t st = ++flow_stamp_[v];
-    for (const auto& path : flows_[v].paths) {
-        for (int a : path) {
-            arc_users_[a].emplace_back(v, st);
-            vertex_users_[g_.arc(a).head].emplace_back(v, st);
+}
+
+// Swap-remove one reference; the reference moved into the hole gets its stored position patched.
+void EssentialOracle::detach_arc_ref(const Entry& e) {
+    std::vector<Ref>& lst = arc_users_[e.arc];
+    const int slot = e.arc_slot;
+    const int last_slot = (int)lst.size() - 1;
+    if (slot != last_slot) {
+        const Ref moved = lst[last_slot];
+        lst[slot] = moved;
+        reg_[moved.v][moved.path][moved.pos].arc_slot = slot;
+    }
+    lst.pop_back();
+}
+
+void EssentialOracle::detach_vertex_ref(const Entry& e) {
+    std::vector<Ref>& lst = vertex_users_[g_.arc(e.arc).head];
+    const int slot = e.vtx_slot;
+    const int last_slot = (int)lst.size() - 1;
+    if (slot != last_slot) {
+        const Ref moved = lst[last_slot];
+        lst[slot] = moved;
+        reg_[moved.v][moved.path][moved.pos].vtx_slot = slot;
+    }
+    lst.pop_back();
+}
+
+// Append one reference per path arc of flows_[v]; reg_[v] must hold no entries (unregister_flow first).
+void EssentialOracle::register_flow(int v) {
+    ensure_arc_index_size();
+    const VertexFlow& f = flows_[v];
+    std::vector<std::vector<Entry>>& rv = reg_[v];
+    rv.resize(f.paths.size());  // the inner vectors keep their capacity across re-registrations
+    for (size_t i = 0; i < f.paths.size(); ++i) {
+        const std::vector<int>& path = f.paths[i];
+        std::vector<Entry>& ri = rv[i];
+        if (!ri.empty()) throw std::logic_error("EssentialOracle: flow " + vstr(v) + " is already registered");
+        ri.reserve(path.size());
+        for (size_t j = 0; j < path.size(); ++j) {
+            const int a = path[j];
+            const int h = g_.arc(a).head;
+            ri.push_back(Entry{a, (int)arc_users_[a].size(), (int)vertex_users_[h].size()});
+            arc_users_[a].push_back(Ref{v, (int)i, (int)j});
+            vertex_users_[h].push_back(Ref{v, (int)i, (int)j});
         }
     }
 }
 
-// Compact a (v, stamp) list in place and return the live vertices (sorted).
+// Remove every reference of v (O(1) each); a flow that is not registered is a no-op.
+void EssentialOracle::unregister_flow(int v) {
+    for (std::vector<Entry>& ri : reg_[v]) {
+        for (const Entry& e : ri) {
+            detach_arc_ref(e);
+            detach_vertex_ref(e);
+        }
+        ri.clear();
+    }
+}
+
+void EssentialOracle::invalidate(int v) {
+    unregister_flow(v);
+    valid_[v] = 0;
+    stale_.push_back(v);
+}
+
+void EssentialOracle::invalidate_all() {
+    for (int v = 0; v < g_.n(); ++v) unregister_flow(v);
+    std::fill(valid_.begin(), valid_.end(), 0);
+    stale_.clear();
+    all_stale_ = true;
+}
+
+// The live users of arc a (sorted; every registered flow is valid).
 std::vector<int> EssentialOracle::users_of_arc_nosync(int a) {
     std::vector<int> r;
     if (a < 0 || a >= (int)arc_users_.size()) return r;
-    auto& lst = arc_users_[a];
-    size_t w = 0;
-    for (size_t i = 0; i < lst.size(); ++i) {
-        const int v = lst[i].first;
-        if (valid_[v] && flow_stamp_[v] == lst[i].second) {
-            lst[w++] = lst[i];
-            r.push_back(v);
-        }
-    }
-    lst.resize(w);
+    const std::vector<Ref>& lst = arc_users_[a];
+    r.reserve(lst.size());
+    for (const Ref& x : lst) r.push_back(x.v);
     std::sort(r.begin(), r.end());
     return r;
 }
 
+// The flows whose paths pass through / end at x (sorted; at most one entry per flow: paths are vertex-disjoint).
 std::vector<int> EssentialOracle::users_of_vertex_nosync(int x) {
     std::vector<int> r;
     if (x < 0 || x >= (int)vertex_users_.size()) return r;
-    auto& lst = vertex_users_[x];
-    size_t w = 0;
-    for (size_t i = 0; i < lst.size(); ++i) {
-        const int v = lst[i].first;
-        if (valid_[v] && flow_stamp_[v] == lst[i].second) {
-            lst[w++] = lst[i];
-            r.push_back(v);
-        }
-    }
-    lst.resize(w);
+    const std::vector<Ref>& lst = vertex_users_[x];
+    r.reserve(lst.size());
+    for (const Ref& e : lst) r.push_back(e.v);
     std::sort(r.begin(), r.end());
     return r;
 }
@@ -164,7 +193,7 @@ void EssentialOracle::recompute_stale(const std::vector<int>& verts) {
     for (int v : todo) {
         valid_[v] = 1;
         mark_cut_exact(v);
-        index_users(v);
+        register_flow(v);
     }
 }
 
@@ -191,10 +220,9 @@ void EssentialOracle::recompute_pending_stale() {
 // [Prop 4.2] for every live non-terminal, from scratch (O8 parallel). Resynchronizes unconditionally.
 void EssentialOracle::compute_all() {
     Stats::Timer timer(stats_, "essential.compute_all");
-    invalidate_all();
+    invalidate_all();  // unregisters every flow: both user lists are empty afterwards
     synced_version_ = g_.version();
-    for (auto& lst : arc_users_) lst.clear();
-    for (auto& lst : vertex_users_) lst.clear();
+    ensure_arc_index_size();
     for (int v = 0; v < g_.n(); ++v)
         if (!g_.live(v) || g_.is_terminal(v)) flows_[v] = VertexFlow{};
     recompute_pending_stale();
@@ -210,7 +238,7 @@ const VertexFlow& EssentialOracle::flow(int v) {
         ++stats_.max_flow_calls;
         valid_[v] = 1;
         mark_cut_exact(v);
-        index_users(v);
+        register_flow(v);
     }
     flows_[v].version = g_.version();
     flows_[v].cut_exact = cut_is_exact(v);  // demote cuts computed before a cut-moving mutation
@@ -251,10 +279,29 @@ void EssentialOracle::refresh_all_cuts() {
     stats_.cut_calls += (int64_t)todo.size();
 }
 
+// The tightest cut of v with the side of every vertex: one reverse BFS (the sides are the same for every
+// maximum flow of v, [Def 3.8] uniqueness), never stored.
+void EssentialOracle::sides(int v, std::vector<Side>& out) {
+    flow(v);
+    FlowEngine::Scratch& s = scratch(0);
+    engine_.load(flows_[v], s);
+    engine_.compute_cut(flows_[v], s, kNoForbidden, true);
+    mark_cut_exact(v);
+    ++stats_.cut_calls;
+    out.swap(flows_[v].side);
+    std::vector<Side>().swap(flows_[v].side);
+}
+
 // O1: the vertices whose stored (current) flow uses arc a.
 std::vector<int> EssentialOracle::users_of_arc(int a) {
     ensure_synced();
     return users_of_arc_nosync(a);
+}
+
+size_t EssentialOracle::num_users_of_arc(int a) {
+    ensure_synced();
+    if (a < 0 || a >= (int)arc_users_.size()) return 0;
+    return arc_users_[a].size();
 }
 
 // O2/O5 warm-started evaluation of deleting the arc set D, for every vertex whose flow uses an arc of D:
@@ -274,8 +321,8 @@ std::vector<int> EssentialOracle::evaluate_deletion(const std::vector<int>& D, s
     recompute_pending_stale();
     std::vector<int> affected;
     for (int a : D) {
-        std::vector<int> u = users_of_arc_nosync(a);
-        affected.insert(affected.end(), u.begin(), u.end());
+        if (a >= (int)arc_users_.size()) continue;
+        for (const Ref& r : arc_users_[a]) affected.push_back(r.v);
     }
     std::sort(affected.begin(), affected.end());
     affected.erase(std::unique(affected.begin(), affected.end()), affected.end());
@@ -284,12 +331,11 @@ std::vector<int> EssentialOracle::evaluate_deletion(const std::vector<int>& D, s
     run_parallel(affected.size(), [&](size_t i, int w) {
         const int v = affected[i];
         FlowEngine::Scratch& s = scratch(w);
-        VertexFlow f = flows_[v];
+        VertexFlow& f = out[v];
+        f = flows_[v];  // copy-assignment reuses the slot's buffers
         const int old_kappa = f.kappa;
         engine_.load(f, s);
-        int removed = 0;
-        for (int a : D)
-            if (engine_.remove_path_using_arc(f, a, s)) ++removed;
+        const int removed = engine_.remove_paths_using_arcs(f, D, s);
         int restored = 0;
         while (restored < removed) {
             ++aug_calls[w];
@@ -305,7 +351,6 @@ std::vector<int> EssentialOracle::evaluate_deletion(const std::vector<int>& D, s
             f.side.clear();
         }
         f.version = g_.version();
-        out[v] = std::move(f);
     });
     for (size_t w = 0; w < aug_calls.size(); ++w) {
         stats_.augment_calls += aug_calls[w];
@@ -335,18 +380,19 @@ void EssentialOracle::commit_deletion(const std::vector<int>& D, const std::vect
         if (v < 0 || v >= g_.n() || (size_t)v >= computed.size() || computed[v].v != v)
             throw std::invalid_argument("EssentialOracle::commit_deletion: no computed flow for vertex " + vstr(v));
         if (!g_.live(v) || g_.is_terminal(v)) continue;
+        unregister_flow(v);
         flows_[v] = std::move(computed[v]);
         computed[v] = VertexFlow{};
         flows_[v].version = g_.version();
         valid_[v] = 1;
         if (flows_[v].cut_exact) mark_cut_exact(v);  // computed with D forbidden = exact in G \ D
-        index_users(v);
+        register_flow(v);
     }
     // Safety net: a flow (re)computed between evaluate and commit may use D; recompute it in G \ D now.
     std::vector<int> extra;
     for (int a : uniq) {
-        std::vector<int> u = users_of_arc_nosync(a);
-        extra.insert(extra.end(), u.begin(), u.end());
+        if (a >= (int)arc_users_.size() || arc_users_[a].empty()) continue;
+        for (const Ref& r : arc_users_[a]) extra.push_back(r.v);
     }
     if (!extra.empty()) {
         std::sort(extra.begin(), extra.end());
@@ -368,6 +414,11 @@ void EssentialOracle::commit_deletion(const std::vector<int>& D, const std::vect
 // in that case, demoting every stored cut to "certified subset" (refresh_cut / refresh_all_cuts restore
 // exactness with one reverse BFS each). The out-degree at contraction time is read from the Graph's
 // contraction record, since the hook runs after the mutation.
+//
+// Cost: O(#flows through p). vertex_users_[p] names, for every such flow, the registry entry of the arc
+// entering p, i.e. the position (i, j) of that arc on the flow's paths; the translation replaces
+// paths[i][j] and pops paths[i][j+1] (the arc (p,t), last on the path), and the index is patched with two
+// O(1) removals and two appends. No path is scanned.
 void EssentialOracle::after_contraction(int p, int t) {
     Stats::Timer timer(stats_, "essential.after_contraction");
     stats_.contractions += 1;
@@ -385,18 +436,41 @@ void EssentialOracle::after_contraction(int p, int t) {
                                     "): the last graph mutation was not this contraction");
     }
     if (rec.out_degree != 1) ++exact_epoch_;  // |D| = d^+(p) - 1 >= 1 arc deletions: cuts may move (O1, not O3)
+    ensure_arc_index_size();                   // redirected arcs have new ids
+    unregister_flow(p);
     valid_[p] = 0;
     flows_[p] = VertexFlow{};
-    for (int u : users_of_vertex_nosync(p)) {
-        if (engine_.can_translate_after_contraction(flows_[u], p, t)) {
-            engine_.translate_after_contraction(flows_[u], p, t);
-            flows_[u].version = g_.version();
-            index_users(u);
+    // Every flow through p has exactly one entry here (its arc into p); processing a flow only touches its
+    // own registry positions, so the copied references stay valid throughout the loop.
+    const std::vector<Ref> through(vertex_users_[p]);
+    const uint64_t version = g_.version();
+    for (const Ref& r : through) {
+        const int u = r.v;
+        VertexFlow& f = flows_[u];
+        if (engine_.translate_path_after_contraction(f, (size_t)r.path, (size_t)r.pos, p, t)) {
+            std::vector<Entry>& ri = reg_[u][r.path];
+            if (ri.size() != (size_t)r.pos + 2)
+                throw std::logic_error("EssentialOracle::after_contraction: user index out of sync for flow " + vstr(u));
+            const Entry last = ri.back();      // the arc (p, t): gone
+            detach_arc_ref(last);
+            detach_vertex_ref(last);
+            ri.pop_back();
+            Entry& e = ri[r.pos];              // the arc into p: now the redirected arc into t
+            detach_arc_ref(e);
+            detach_vertex_ref(e);
+            const int a_new = f.paths[r.path][r.pos];
+            e.arc = a_new;
+            e.arc_slot = (int)arc_users_[a_new].size();
+            arc_users_[a_new].push_back(Ref{u, r.path, r.pos});
+            e.vtx_slot = (int)vertex_users_[t].size();
+            vertex_users_[t].push_back(Ref{u, r.path, r.pos});
+            f.version = version;
         } else {
             invalidate(u);
         }
     }
-    vertex_users_[p].clear();
+    if (!vertex_users_[p].empty())
+        throw std::logic_error("EssentialOracle::after_contraction: flows still registered through " + vstr(p));
 }
 
 // O4: after Graph::remove_terminal(t) drop the path ending at t (if any). The remainder has value kappa-1
@@ -434,9 +508,13 @@ void EssentialOracle::after_terminal_removal(int t) {
     stats_.cut_calls += (int64_t)verts.size();
     for (int v : verts) {
         mark_cut_exact(v);
-        if (changed[v]) index_users(v);
+        if (changed[v]) {
+            unregister_flow(v);  // the registry entries name the OLD arcs, so this is exact
+            register_flow(v);
+        }
     }
-    vertex_users_[t].clear();
+    if (!vertex_users_[t].empty())
+        throw std::logic_error("EssentialOracle::after_terminal_removal: flows still registered through " + vstr(t));
 }
 
 // Generic vertex removal (rounding): drop v's flow, invalidate the flows through v (recomputed lazily) and
@@ -449,10 +527,12 @@ void EssentialOracle::after_vertex_removal(int v) {
         invalidate_all();  // one unprocessed mutation: stay safe even if the caller catches the error
         throw std::invalid_argument("EssentialOracle::after_vertex_removal: " + vstr(v) + " is still live");
     }
+    unregister_flow(v);
     valid_[v] = 0;
     flows_[v] = VertexFlow{};
     for (int u : users_of_vertex_nosync(v)) invalidate(u);
-    vertex_users_[v].clear();
+    if (!vertex_users_[v].empty())
+        throw std::logic_error("EssentialOracle::after_vertex_removal: flows still registered through " + vstr(v));
     ++exact_epoch_;  // every other cut is demoted to "certified subset"
 }
 

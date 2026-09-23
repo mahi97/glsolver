@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "bindings.hpp"
+#include "bindings_arcs.hpp"
 #include "dag.hpp"
 #include "graph.hpp"
 #include "matching.hpp"
@@ -21,8 +22,6 @@ namespace py = pybind11;
 
 namespace glcore {
 namespace {
-
-using ArcList = std::vector<std::pair<int, int>>;
 
 // Stats -> dict (docs/api.md `stats` field).
 py::dict stats_to_dict(const Stats& s) {
@@ -58,8 +57,8 @@ void bind_matching_dag(py::module_& m) {
     // [Lem 7.8] saturating matching of S (default: all terminals) into distinct pre-terminals.
     m.def(
         "saturating_matching",
-        [](int n, const ArcList& arcs, const std::vector<int>& terminals, std::optional<std::vector<int>> S) -> py::object {
-            Graph g(n, arcs, terminals);
+        [](int n, const py::object& arcs_obj, const std::vector<int>& terminals, std::optional<std::vector<int>> S) -> py::object {
+            Graph g(n, arcs_from_object(arcs_obj, "saturating_matching"), terminals);
             const std::vector<int> Sv = S ? *S : g.terminals();
             std::vector<int> res;
             {
@@ -77,8 +76,8 @@ void bind_matching_dag(py::module_& m) {
     // [Lem 7.6] inclusion-minimal Hall-deficient terminal set, or None if T is saturable.
     m.def(
         "minimal_hall_deficient_set",
-        [](int n, const ArcList& arcs, const std::vector<int>& terminals) -> py::object {
-            Graph g(n, arcs, terminals);
+        [](int n, const py::object& arcs_obj, const std::vector<int>& terminals) -> py::object {
+            Graph g(n, arcs_from_object(arcs_obj, "minimal_hall_deficient_set"), terminals);
             std::vector<int> res;
             {
                 py::gil_scoped_release release;
@@ -116,8 +115,9 @@ void bind_matching_dag(py::module_& m) {
     // [Alg 5] GLDAGPartition.
     m.def(
         "dag_partition",
-        [](int n, const ArcList& arcs, const std::vector<int>& terminals, const std::vector<int64_t>& capacities,
+        [](int n, const py::object& arcs_obj, const std::vector<int>& terminals, const std::vector<int64_t>& capacities,
            std::optional<std::vector<int64_t>> weights, int policy, int variant, bool check_precondition, bool trace) {
+            const ArcList arcs = arcs_from_object(arcs_obj, "dag_partition");  // numpy (m, 2) int array or (u, v) pairs
             Stats stats;
             Trace tr;
             tr.enabled = trace;
@@ -141,7 +141,8 @@ void bind_matching_dag(py::module_& m) {
         py::arg("n"), py::arg("arcs"), py::arg("terminals"), py::arg("capacities"), py::arg("weights") = py::none(),
         py::arg("policy") = 0, py::arg("variant") = 0, py::arg("check_precondition") = true, py::arg("trace") = false,
         "dag_partition(n, arcs, terminals, capacities, weights=None, policy=0, variant=0, check_precondition=True, "
-        "trace=False) -> dict(status, message, assignment, parent, stats, trace). [Alg 5] on a k-T-connected DAG; "
+        "trace=False) -> dict(status, message, assignment, parent, stats, trace). arcs: a numpy integer array of shape "
+        "(m, 2) or a sequence of (u, v) pairs. [Alg 5] on a k-T-connected DAG; "
         "policy 0 = max residual, 1 = round robin, 2 = first active; variant 0 = heaps, 1 = linear stack (P1). "
         "trace is a list of (type, json) pairs.");
 }
