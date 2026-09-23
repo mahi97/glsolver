@@ -116,6 +116,18 @@ on `k`-connected undirected inputs, giving `O(n k (n+m))` overall. Open.
 premise — that the routing keeps `Σ_i |U_i|` small — holds only where the graph
 has routing slack, so this conjecture is open only for such inputs.)
 
+### C3. GPU acceleration of the certificate phase (2026-09-21)
+
+The machine has an NVIDIA GB10 (Grace–Blackwell, unified memory, CUDA 13.0
+toolkit with nvcc; no CuPy/numba installed). The only embarrassingly parallel
+phase of the general algorithm is "one unit-capacity flow per vertex" (the
+initial certificates and the ≤ k full refreshes after terminal removals). A
+batched multi-source level-synchronous BFS kernel with per-source residual
+flags could plausibly beat the 20-core CPU version by 5–20× on that phase for
+`n ≥ 10^5`. The sequential main loop (incremental re-validation of a few
+vertices per step) is not a GPU workload. Status: idea; to be prototyped only
+if profiling (Stage G) shows the certificate phase dominating at scale.
+
 ## Empirical observations
 
 ### E1. First measurements of the C++ core (2026-09-21, 20-core Cortex-X925, 8 threads, release build)
@@ -136,57 +148,6 @@ running time; (c) contraction cost is not free: translating every stored path th
 (store paths as predecessor pointers so translation is O(1) per path) is the obvious next optimization;
 (d) exhaustive correctness: 145 400 undirected instances (n ≤ 7) and 3 278 digraphs (n ≤ 4) solved by both C++
 solvers with debug assertions, 0 failures.
-
-## Failed ideas
-
-* **Reusing an undirected global cut structure (Gomory–Hu / cactus) across the
-  run.** Not applicable: the objects are *vertex* cuts between a vertex and a
-  terminal *set* in a digraph that becomes asymmetric after the first deletion.
-  Gomory–Hu trees model edge cuts of undirected graphs; the vertex-cut analogue
-  does not exist in general. Only the initial symmetric state can exploit
-  undirected structure (P3).
-* **Skipping cut refresh after terminal removal when κ is unchanged.**
-  Counterexample (paper_notes §13.3): new essential terminals appear.
-* **C1 as a performance conjecture: "fan-routed certificates make most deletions free" (refuted 2026-09-23,
-  measured in E5).** The conjecture, in its original wording:
-
-  > In a `k`-connected undirected graph the fan lemma gives, for every vertex `v` and every set `P` of `k`
-  > vertices, `k` vertex-disjoint `v→P` paths. Take `P` to be the matched pre-terminals `p_1..p_k` [Lem 7.8].
-  > Then every `F_v` (`v ∉ P`) can be routed so that its paths reach `T` only through the matching arcs
-  > `(p_i, t_i)`, making every secondary arc `e_i` unused by every flow but `F_{p_i}` (docs/optimizations.md
-  > O1). Conjecture: choosing per-vertex *min-cost* flows (cost 1 on non-gateway out-arcs of pre-terminals, 0
-  > elsewhere; same complexity as max-flow with 0–1 BFS) keeps the number of vertices affected by each
-  > deletion small throughout the run, so the practical running time is dominated by the initial `n` flows.
-
-  Implemented exactly so (`options["routing"] = "avoid"`, P4 for its exactness) and measured interleaved
-  against the plain BFS on eight instances (E5). Counter-measurement: on Harary H_{4,1000} the number of flows
-  repaired per deletion is **268.4 with the plain BFS and 268.1 with the penalized routing** (-0.1 %), the
-  augmentation count 778 191 vs 777 422, and the wall clock 2.55 s vs 2.99 s (**17 % slower**); on random
-  4-regular n = 2 000 the repairs *rise* by 5.5 % and the run is 22 % slower. The reason is structural, not a
-  matter of tuning: the flaw in the fan-lemma argument is that the fan only controls how the paths *arrive* at
-  `P`, while the cost that dominates the run comes from paths that *transit* the neighbourhood of a terminal
-  on their way to a different terminal. In a graph whose degree equals `k` (Harary, `d`-regular with `k = d`)
-  those transits have no alternative route, so no routing can avoid the deletable arcs, and the deletions keep
-  touching hundreds of flows. The conjecture's conclusion ("the running time is dominated by the initial `n`
-  flows") is false on every instance measured: `compute_all` is 0.6-14 % of the run on the seven sparse
-  instances (Harary H_{4,2000}: 0.7 %, sparse k-connected n = 10 000: 10-13 %) and 44 % only on the dense
-  Erdos-Renyi instance, where the routing changes no counter at all (but still costs 22 % on
-  `evaluate_deletion`); `evaluate_deletion` still takes 67-93 % of every sparse run in both modes.
-  What survives is the weaker statement recorded in E5: where the graph has routing *slack* (Harary plus
-  random chords), the same routing removes 41 % of the augmentations and 45 % of the repairs and is 20 %
-  faster — so the option is kept, but not as a default.
-
-### C3. GPU acceleration of the certificate phase (2026-09-21)
-
-The machine has an NVIDIA GB10 (Grace–Blackwell, unified memory, CUDA 13.0
-toolkit with nvcc; no CuPy/numba installed). The only embarrassingly parallel
-phase of the general algorithm is "one unit-capacity flow per vertex" (the
-initial certificates and the ≤ k full refreshes after terminal removals). A
-batched multi-source level-synchronous BFS kernel with per-source residual
-flags could plausibly beat the 20-core CPU version by 5–20× on that phase for
-`n ≥ 10^5`. The sequential main loop (incremental re-validation of a few
-vertices per step) is not a GPU workload. Status: idea; to be prototyped only
-if profiling (Stage G) shows the certificate phase dominating at scale.
 
 ### E2. Baseline benchmark sweep (2026-09-21 21:02–22:39, 2 894 rows, 0 invalid, 0 timeouts, 0 errors)
 
@@ -216,7 +177,6 @@ splice is O(path length) per affected flow). Memory (RSS ≈ n^2.9, 56 GB at n =
 user index, which appends an entry for every arc of a changed flow and only compacts lazily: (#flow changes) × (path
 length) entries. Greedy contraction (O5) succeeds in 67 % of attempts at n = 100 but only 32 % at n = 10⁴ on random regular
 graphs, so the exact ShiftAssignment fallback increasingly dominates there. These three items define the optimization stage.
-
 
 
 ### E3. Oracle engineering: exact user index, O(1) contraction translation, worker pool (2026-09-22)
@@ -637,3 +597,42 @@ re-routing pass toggled twice inside one process (`reroutes` 0 / 108 / 0). The C
 (`tests/cxx/routing_probe.cpp`, 20 000 seeded residual states) is kept: it reaches residual states no Python
 API can build.
 
+
+## Failed ideas
+
+* **Reusing an undirected global cut structure (Gomory–Hu / cactus) across the
+  run.** Not applicable: the objects are *vertex* cuts between a vertex and a
+  terminal *set* in a digraph that becomes asymmetric after the first deletion.
+  Gomory–Hu trees model edge cuts of undirected graphs; the vertex-cut analogue
+  does not exist in general. Only the initial symmetric state can exploit
+  undirected structure (P3).
+* **Skipping cut refresh after terminal removal when κ is unchanged.**
+  Counterexample (paper_notes §13.3): new essential terminals appear.
+* **C1 as a performance conjecture: "fan-routed certificates make most deletions free" (refuted 2026-09-23,
+  measured in E5).** The conjecture, in its original wording:
+
+  > In a `k`-connected undirected graph the fan lemma gives, for every vertex `v` and every set `P` of `k`
+  > vertices, `k` vertex-disjoint `v→P` paths. Take `P` to be the matched pre-terminals `p_1..p_k` [Lem 7.8].
+  > Then every `F_v` (`v ∉ P`) can be routed so that its paths reach `T` only through the matching arcs
+  > `(p_i, t_i)`, making every secondary arc `e_i` unused by every flow but `F_{p_i}` (docs/optimizations.md
+  > O1). Conjecture: choosing per-vertex *min-cost* flows (cost 1 on non-gateway out-arcs of pre-terminals, 0
+  > elsewhere; same complexity as max-flow with 0–1 BFS) keeps the number of vertices affected by each
+  > deletion small throughout the run, so the practical running time is dominated by the initial `n` flows.
+
+  Implemented exactly so (`options["routing"] = "avoid"`, P4 for its exactness) and measured interleaved
+  against the plain BFS on eight instances (E5). Counter-measurement: on Harary H_{4,1000} the number of flows
+  repaired per deletion is **268.4 with the plain BFS and 268.1 with the penalized routing** (-0.1 %), the
+  augmentation count 778 191 vs 777 422, and the wall clock 2.55 s vs 2.99 s (**17 % slower**); on random
+  4-regular n = 2 000 the repairs *rise* by 5.5 % and the run is 22 % slower. The reason is structural, not a
+  matter of tuning: the flaw in the fan-lemma argument is that the fan only controls how the paths *arrive* at
+  `P`, while the cost that dominates the run comes from paths that *transit* the neighbourhood of a terminal
+  on their way to a different terminal. In a graph whose degree equals `k` (Harary, `d`-regular with `k = d`)
+  those transits have no alternative route, so no routing can avoid the deletable arcs, and the deletions keep
+  touching hundreds of flows. The conjecture's conclusion ("the running time is dominated by the initial `n`
+  flows") is false on every instance measured: `compute_all` is 0.6-14 % of the run on the seven sparse
+  instances (Harary H_{4,2000}: 0.7 %, sparse k-connected n = 10 000: 10-13 %) and 44 % only on the dense
+  Erdos-Renyi instance, where the routing changes no counter at all (but still costs 22 % on
+  `evaluate_deletion`); `evaluate_deletion` still takes 67-93 % of every sparse run in both modes.
+  What survives is the weaker statement recorded in E5: where the graph has routing *slack* (Harary plus
+  random chords), the same routing removes 41 % of the augmentations and 45 % of the repairs and is 20 %
+  faster — so the option is kept, but not as a default.
