@@ -109,6 +109,7 @@ GLSolver::GLSolver(int n, const std::vector<std::pair<int, int>>& arcs, const st
     greedy_credit_ = kGreedyCreditMax;
     match_p_.assign(k, -1);
     matched_to_.assign(n, -1);
+    reroute_pass_ = c1_reroute_enabled();  // C1, off by default (RESEARCH_NOTES E5)
 }
 
 // ------------------------------------------------------------------------------------------ small helpers
@@ -125,6 +126,103 @@ void GLSolver::push_pt_candidate(int v) {
     if (in_pt_candidates_[v]) return;
     in_pt_candidates_[v] = 1;
     pt_candidates_.push_back(v);
+}
+
+// ------------------------------------------------------------------------------------------ C1 penalties
+
+// Incremental entry point of the penalty maintenance: a no-op with routing = "bfs", where the array is built
+// only at the two diagnostic points (which recompute it in full), never handed to the oracle and never
+// maintained — so the option costs the baseline nothing (E5).
+void GLSolver::penalty_update_vertex(int p) {
+    if (opt_.routing_avoid) penalty_set_vertex(p);
+}
+
+// Recompute penalty_[a] for every out-arc a of p (C1, RESEARCH_NOTES E5). The rule:
+//   penalty 1  iff  p is a live pre-terminal and a is an out-arc of p that the algorithm may delete,
+// i.e. (with a witness) every out-arc other than (p, phi(p)) — exactly the set D_p of steps (iii-a)/(iii-b)
+// and the candidate set of the secondary arcs of [Alg 2] — and (before the witness exists, during the
+// initial compute_all) every out-arc that does not enter a terminal.
+// O(d^+(p)). Only the out-arcs of p can change: a penalty depends on the pre-terminal status of the TAIL
+// and on phi of the TAIL alone.
+void GLSolver::penalty_set_vertex(int p) {
+    if (p < 0 || p >= g_.n()) return;
+    if (penalty_.size() < (size_t)g_.num_arc_ids()) penalty_.resize(g_.num_arc_ids(), 0);
+    if (!g_.live(p) || g_.is_terminal(p)) {
+        for (int a : g_.out_arcs(p)) penalty_[a] = 0;
+        return;
+    }
+    const int a_phi = (have_witness_ && phi_[p] >= 0 && g_.is_terminal(term_vertex_[phi_[p]]))
+                          ? g_.find_arc(p, term_vertex_[phi_[p]])
+                          : -1;
+    const bool pre = g_.is_pre_terminal(p);
+    for (int a : g_.out_arcs(p)) {
+        unsigned char v = 0;
+        if (pre) {
+            if (have_witness_) v = (a == a_phi) ? 0 : 1;
+            else v = g_.is_terminal(g_.arc(a).head) ? 0 : 1;
+        }
+        penalty_[a] = v;
+    }
+}
+
+void GLSolver::penalty_recompute_all() {
+    penalty_.assign(g_.num_arc_ids(), 0);
+    for (int v : g_.live_nonterminals()) penalty_set_vertex(v);
+}
+
+// C1 re-routing pass (the "periodic re-routing" of the conjecture, in its cheapest useful form: once, right
+// after the initial witness). The flows of compute_all were routed before phi existed, under the weaker rule
+// "avoid the out-arcs of a pre-terminal that do not enter a terminal"; once phi is known the arcs the
+// algorithm will actually delete are out(p) \ {(p, phi(p))}, so the flows that use one of those are
+// recomputed under the real rule. Work: at most one from-scratch flow per offending vertex, i.e. bounded by
+// one compute_all, once per run. Exact: see EssentialOracle::reroute.
+//
+// MEASURED AND OFF (RESEARCH_NOTES E5): the pass does reach a better routing — on random 4-regular n = 2 000
+// it halves the users of penalized arcs (7 044 -> 4 064) and on sparse k-connected n = 10 000 it removes a
+// further 12 % of the augmentations (120 701 -> 106 276) — but it costs one penalized from-scratch flow per
+// offending vertex, which is MORE than it saves (sk10000: +4.0 s of re-routing against -0.2 s of evaluation,
+// wall 10.6 s -> 14.7 s; rr2000: 0.61 s -> 0.78 s; Harary: no change at all, the flows are forced). It is
+// therefore disabled; GLCORE_C1_REROUTE=1 in the environment re-enables it (same-binary A/B for the record).
+// Note it is more than a re-routing: EssentialOracle::reroute recomputes those flows FROM SCRATCH, so their
+// tightest cuts come back exact (a certified subset is replaced by the exact Ess). That is sound — an exact
+// cut is a certified subset of itself (P2) — but it can change later decisions that read ess(v), which is why
+// the differential test for the pass compares partitions through the verifier and not against the off run.
+void GLSolver::penalty_reroute_offenders() {
+    if (!opt_.routing_avoid) return;
+    if (!reroute_pass_) return;
+    Stats::Timer timer(stats_, "c1_reroute");
+    std::vector<int> offenders;
+    for (int a = 0; a < g_.num_arc_ids(); ++a) {
+        if (!g_.arc(a).alive || a >= (int)penalty_.size() || !penalty_[a]) continue;
+        for (int v : oracle_.users_of_arc(a)) offenders.push_back(v);
+    }
+    std::sort(offenders.begin(), offenders.end());
+    offenders.erase(std::unique(offenders.begin(), offenders.end()), offenders.end());
+    oracle_.reroute(offenders);  // counts stats_.reroutes
+}
+
+// C1 diagnostic (b): how many stored flows currently use an arc the algorithm is likely to delete.
+int64_t GLSolver::penalized_users() {
+    int64_t total = 0;
+    for (int a = 0; a < g_.num_arc_ids(); ++a)
+        if (g_.arc(a).alive && a < (int)penalty_.size() && penalty_[a]) total += (int64_t)oracle_.num_users_of_arc(a);
+    return total;
+}
+
+// The incremental maintenance must agree with a full recomputation on every ALIVE arc (dead arcs are never
+// read: the BFS walks out_arcs(), which lists alive arcs only).
+void GLSolver::penalty_debug_check(const char* where) {
+    if (!opt_.routing_avoid) return;  // nothing is maintained when the option is off
+    std::vector<unsigned char> mine(penalty_);
+    penalty_recompute_all();
+    for (int a = 0; a < g_.num_arc_ids(); ++a) {
+        if (!g_.arc(a).alive) continue;
+        const unsigned char got = a < (int)mine.size() ? mine[a] : (unsigned char)0;
+        if (got != penalty_[a])
+            throw std::logic_error(std::string("C1 penalty out of sync after ") + where + ": arc " + vs(a) + " (" +
+                                   vs(g_.arc(a).tail) + "," + vs(g_.arc(a).head) + ") is " + vs(got) + ", recomputed " +
+                                   vs(penalty_[a]));
+    }
 }
 
 void GLSolver::mark_candidate_dirty(int v) {
@@ -225,6 +323,7 @@ void GLSolver::debug_check_witness(const char* where) {
             throw std::logic_error(std::string("A1 violated after ") + where + ": terminal " + vs(t) + " receives " +
                                    vs(counts[ti]) + " vertices, capacity " + vs(cap_[ti]));
     }
+    penalty_debug_check(where);  // C1: incremental maintenance vs. a full recomputation
 }
 
 void GLSolver::check_after_operation(const char* where) {
@@ -263,6 +362,17 @@ void GLSolver::delete_and_commit(const std::vector<int>& D, const std::vector<in
         push_degree_changed(g_.arc(a).tail);
         mark_candidate_dirty(g_.arc(a).tail);
         g_.delete_arc(a);
+    }
+    if (opt_.routing_avoid) {
+        // C1: the penalty of a SURVIVING arc (u, q) is [u is a pre-terminal] && [(u,q) is not the kept arc],
+        // and both depend only on the arcs from u into terminals; so a tail needs no work unless one of the
+        // deleted arcs entered a terminal (it may have been the kept arc, or u's last arc into a terminal).
+        std::vector<int> tails;
+        for (int a : D)
+            if (g_.is_terminal(g_.arc(a).head)) tails.push_back(g_.arc(a).tail);
+        std::sort(tails.begin(), tails.end());
+        tails.erase(std::unique(tails.begin(), tails.end()), tails.end());
+        for (int u : tails) penalty_update_vertex(u);
     }
     oracle_.commit_deletion(D, affected, out);
     for (int v : affected) {
@@ -312,6 +422,7 @@ bool GLSolver::step_remove_zero_terminal() {
         Stats::Timer timer(stats_, "terminal_removal");
         for (int a : g_.in_arcs(t)) push_degree_changed(g_.arc(a).tail);
         g_.remove_terminal(t);
+        if (opt_.routing_avoid) penalty_recompute_all();  // C1: many vertices stop being pre-terminals at once
         oracle_.after_terminal_removal(t);  // counts stats_.terminal_removals
         cand_all_dirty_ = true;             // every flow may have been rerouted (O4); the matching entry of t
                                             // is dropped by ensure_saturating_matching's validation
@@ -373,6 +484,10 @@ void GLSolver::contract_into(int p, int t) {
     mark_candidate_dirty(p);   // dropped from the candidate list at the next refresh
     parent_[p] = g_.contract(p, t);
     oracle_.after_contraction(p, t);  // O3; counts stats_.contractions
+    // C1: p is dead and every in-neighbour's arc (u,p) became (u,t) with a NEW arc id (u is a pre-terminal
+    // now), so the penalties of p and of the in-neighbours are recomputed; no other tail is touched.
+    penalty_update_vertex(p);
+    for (int u : preds) penalty_update_vertex(u);
     cap_[ti] -= 1;
     if (cap_[ti] == 0) zero_terms_.push_back(ti);
     part_[p] = ti;
@@ -873,6 +988,7 @@ void GLSolver::step_shift_assignment() {
             if (old != pred[ti].first) throw std::logic_error("[Alg 2] vertex " + vs(v) + " shifted twice in one cycle");
             phi_[v] = ti;  // [Lem 7.11]
             mark_candidate_dirty(v);  // (v, phi(v)) changed: its O1/O5 data must be recomputed
+            penalty_update_vertex(v);  // C1: the kept arc of v is now (v, t_i)
             changes.push_back({v, term_vertex_[old], term_vertex_[ti]});
         }
         // P2(b): certify t_i for v_i with one exact cut; [Lem 7.9] guarantees membership.
@@ -931,10 +1047,17 @@ SolveResult GLSolver::run() {
                       vs(g_.num_live_nonterminals()) + " non-terminals [Def 5.1]";
         return res;
     }
+    // C1: the initial routing must already avoid the arcs the algorithm is likely to delete, so the penalty
+    // array is built BEFORE the first flows (before a witness exists the rule penalizes the out-arcs of a
+    // pre-terminal that do not enter a terminal). The array is maintained in both modes — the two
+    // diagnostics below must be comparable — but only handed to the oracle when routing = "avoid".
+    penalty_recompute_all();
+    if (opt_.routing_avoid) oracle_.set_penalties(&penalty_);
     {
         Stats::Timer t(stats_, "compute_all");
         oracle_.compute_all();
     }
+    stats_.penalized_users_initial = penalized_users();
     res.k_T_connected = true;
     int bad = -1;
     for (int v : g_.live_nonterminals())
@@ -954,6 +1077,10 @@ SolveResult GLSolver::run() {
         }
     }
     initial_witness_ = phi_;
+    have_witness_ = true;
+    penalty_recompute_all();    // C1: the kept arc of every pre-terminal p is now (p, phi(p))
+    penalty_reroute_offenders();  // C1: re-route the flows that use one of those arcs, under the real rule
+    stats_.penalized_users_witness = penalized_users();  // measured after the re-routing pass
     trace_.record("witness", JsonObject().raw("phi", phi_json()).build());
     for (int i = 0; i < k; ++i)
         if (cap_[i] == 0) zero_terms_.push_back(i);

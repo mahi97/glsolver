@@ -360,6 +360,8 @@ def _core_options(inst: Instance, opts: dict[str, Any]) -> dict[str, Any]:
         "greedy_contraction": bool(opts.get("greedy_contraction", True)),
         "lazy_shift": bool(opts.get("lazy_shift", True)),
         "batch_unused_arcs": bool(opts.get("batch_unused_arcs", True)),
+        # C1 deletion-aware routing (RESEARCH_NOTES E5): "bfs" (default) | "avoid"
+        "routing": str(opts.get("routing", "bfs")),
         "debug_asserts": bool(opts.get("debug", False)),
         "trace": bool(opts.get("trace", False)),
         "record_cuts": bool(opts.get("record_cuts", False)),

@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <utility>
@@ -18,6 +19,14 @@
 #include "bitset.hpp"
 
 namespace glcore {
+
+// C1 re-routing pass (RESEARCH_NOTES E5): off unless GLCORE_C1_REROUTE=1 is in the environment. Read once
+// per solver at construction — never into a function-local static — so one process can run both settings,
+// which is what lets the pass be tested at all (tests/test_core_routing_review.py).
+inline bool c1_reroute_enabled() {
+    const char* e = std::getenv("GLCORE_C1_REROUTE");
+    return e != nullptr && *e == '1';
+}
 
 // ----------------------------------------------------------------------------------------------- JSON
 

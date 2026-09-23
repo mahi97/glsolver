@@ -21,6 +21,11 @@ struct SolverOptions {
     bool trace = false;
     bool record_cuts = false;
     bool check_precondition = true;   // report kappa < k vertices (informational) and FEAC failure
+    // C1 deletion-aware routing (RESEARCH_NOTES E5), options["routing"]: false = "bfs" (plain BFS
+    // augmenting paths), true = "avoid" (paths of minimum total penalty, penalty 1 on the out-arcs of a
+    // live pre-terminal other than the one into the terminal it is assigned to). Exact either way: the
+    // routing only decides WHICH maximum flow is stored, never kappa, Ess or any decision of the algorithm.
+    bool routing_avoid = false;
 };
 
 struct SolveResult {
@@ -83,6 +88,21 @@ private:
     std::vector<int64_t> greedy_skip_until_;  // per vertex: step number until which O5 skips it (backoff)
     std::vector<int> greedy_failures_;
     int greedy_credit_ = 0;                   // O5 throttle: attempts cost credit, successes earn it
+    // C1: per-arc deletion penalty (1 = an arc the algorithm is likely to delete). Owned here, read by the
+    // oracle's flow engine (only between oracle calls). Maintained incrementally: a vertex's out-arc
+    // penalties depend only on (a) whether it is a live pre-terminal and (b) phi of that vertex, so they are
+    // recomputed for the tails of deleted arcs, the in-neighbours of a contracted vertex (their arcs were
+    // redirected onto the terminal, with new arc ids) and the vertices moved by a cycle shift; a terminal
+    // removal changes the pre-terminal status of many vertices at once and recomputes the whole array
+    // (at most k times). With routing = "bfs" NOTHING of that runs: the array is then built only at the two
+    // diagnostic points inside run() (two full recomputations), is stale in between and is never handed to
+    // the oracle. debug_asserts verifies the incremental maintenance against a full recomputation — also
+    // only when the option is on, so the two modes differ in what the array means, not just in its cost.
+    std::vector<unsigned char> penalty_;
+    bool have_witness_ = false;               // phi_ is filled (the penalty rule before/after differ)
+    // C1 re-routing pass (off; GLCORE_C1_REROUTE=1), read ONCE PER SOLVER at construction rather than into a
+    // function-local static, so that the same process can run both settings (the tests do).
+    bool reroute_pass_ = false;
     // Saturating matching reused across ShiftAssignment calls [Lem 7.8]: repaired in O(in-degree) when a
     // matched pair dies (contraction / deletion), recomputed from scratch only when a repair fails.
     std::vector<int> match_p_;                // terminal index -> matched pre-terminal or -1
@@ -102,6 +122,12 @@ private:
     void delete_and_commit(const std::vector<int>& D, const std::vector<int>& affected, std::vector<VertexFlow>& out);
     void push_degree_changed(int v);
     void push_pt_candidate(int v);
+    void penalty_set_vertex(int p);           // C1: recompute the penalties of the out-arcs of p
+    void penalty_update_vertex(int p);        // the same, but a no-op unless routing = "avoid" is on
+    void penalty_recompute_all();             // C1: recompute the whole array (O(n + m))
+    void penalty_reroute_offenders();         // C1: one re-routing pass after the initial witness
+    int64_t penalized_users();                // C1 diagnostic: Σ_{penalty 1} #users of the arc
+    void penalty_debug_check(const char* where);
     void sample_graph_size();
     void check_after_operation(const char* where);
     void trace_essential();
@@ -156,6 +182,13 @@ private:
     std::vector<int64_t> greedy_skip_until_;  // per vertex: step number until which O5 skips it (backoff)
     std::vector<int> greedy_failures_;
     int greedy_credit_ = 0;                   // O5 throttle (see solver_general.cpp)
+    // C1 deletion-aware routing, as in GLSolver but with the psi target arc of [Def 5.2] in the role of
+    // (p, phi(p)): penalty 1 on every out-arc of a live pre-terminal p other than psi_target_arc(p).
+    // Maintained incrementally only when the option is on; with routing = "bfs" it is built at the two
+    // diagnostic points of run() and stale in between (see GLSolver::penalty_).
+    std::vector<unsigned char> penalty_;
+    bool have_witness_ = false;
+    bool reroute_pass_ = false;               // C1 re-routing pass (off; GLCORE_C1_REROUTE=1), see GLSolver
     // Saturating matching reused across steps (iii) [Lem 7.8]: repaired in O(in-degree), recomputed when needed.
     std::vector<int> match_p_;                // terminal index -> matched pre-terminal or -1
     std::vector<int> matched_to_;             // vertex -> terminal index or -1
@@ -191,6 +224,12 @@ private:
     int64_t psi_units(int v, int ti) const;
     void push_degree_changed(int v);
     void push_pt_candidate(int v);
+    void penalty_set_vertex(int p);           // C1 (see GLSolver)
+    void penalty_update_vertex(int p);
+    void penalty_recompute_all();
+    void penalty_reroute_offenders();
+    int64_t penalized_users();
+    void penalty_debug_check(const char* where);
     void mark_candidate_dirty(int v);
     void mark_flow_arcs_dirty(int v);
     void refresh_dirty_candidates();

@@ -292,6 +292,25 @@ void EssentialOracle::sides(int v, std::vector<Side>& out) {
     std::vector<Side>().swap(flows_[v].side);
 }
 
+// C1 (RESEARCH_NOTES E5): re-route the listed flows. The penalty array installed by the solver decides
+// which maximum flow the engine finds; the flows computed before the witness existed were routed under a
+// weaker rule, so the offenders (the flows using an arc a pre-terminal is likely to lose) are recomputed once
+// the real rule is known. Nothing but the stored paths changes.
+size_t EssentialOracle::reroute(const std::vector<int>& verts) {
+    Stats::Timer timer(stats_, "essential.reroute");
+    ensure_synced();
+    recompute_pending_stale();  // the index must be exact before we pick flows out of it
+    size_t count = 0;
+    for (int v : verts) {
+        if (v < 0 || v >= g_.n() || !g_.live(v) || g_.is_terminal(v) || !valid_[v]) continue;
+        invalidate(v);  // unregisters the flow and queues it
+        ++count;
+    }
+    recompute_pending_stale();
+    stats_.reroutes += (int64_t)count;
+    return count;
+}
+
 // O1: the vertices whose stored (current) flow uses arc a.
 std::vector<int> EssentialOracle::users_of_arc(int a) {
     ensure_synced();
@@ -326,6 +345,7 @@ std::vector<int> EssentialOracle::evaluate_deletion(const std::vector<int>& D, s
     }
     std::sort(affected.begin(), affected.end());
     affected.erase(std::unique(affected.begin(), affected.end()), affected.end());
+    stats_.flow_repairs += (int64_t)affected.size();  // C1 diagnostic: flows re-validated because of D
     if (out.size() < (size_t)g_.n()) out.resize(g_.n());
     std::vector<int64_t> aug_calls(threads_ > 0 ? threads_ : 1, 0), cut_calls(aug_calls.size(), 0);
     run_parallel(affected.size(), [&](size_t i, int w) {

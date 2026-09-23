@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -271,6 +272,7 @@ GLWeightedSolver::GLWeightedSolver(int n, const std::vector<std::pair<int, int>>
     match_p_.assign(k, -1);
     matched_to_.assign(n, -1);
     cost_row_of_.assign(n, -1);
+    reroute_pass_ = c1_reroute_enabled();  // C1, off by default (RESEARCH_NOTES E5)
 }
 
 // ------------------------------------------------------------------------------------------ small helpers
@@ -287,6 +289,78 @@ void GLWeightedSolver::push_pt_candidate(int v) {
     if (in_pt_candidates_[v]) return;
     in_pt_candidates_[v] = 1;
     pt_candidates_.push_back(v);
+}
+
+// ------------------------------------------------------------------------------------------ C1 penalties
+
+// Incremental entry point: a no-op with routing = "bfs" (see GLSolver::penalty_update_vertex).
+void GLWeightedSolver::penalty_update_vertex(int p) {
+    if (opt_.routing_avoid) penalty_set_vertex(p);
+}
+
+// As GLSolver::penalty_set_vertex, with the psi target arc [Def 5.2] in the role of (p, phi(p)): the
+// algorithm keeps psi_target_arc(p) and may delete every other out-arc of a pre-terminal p (steps (iii-a),
+// (iii-b) and the secondary arcs of step (iii)). Before psi exists (the initial compute_all) the out-arcs
+// of a pre-terminal that do not enter a terminal are penalized. O(d^+(p)) plus the psi scan.
+void GLWeightedSolver::penalty_set_vertex(int p) {
+    if (p < 0 || p >= g_.n()) return;
+    if (penalty_.size() < (size_t)g_.num_arc_ids()) penalty_.resize(g_.num_arc_ids(), 0);
+    if (!g_.live(p) || g_.is_terminal(p)) {
+        for (int a : g_.out_arcs(p)) penalty_[a] = 0;
+        return;
+    }
+    const bool pre = g_.is_pre_terminal(p);
+    const int a_psi = (have_witness_ && pre) ? psi_target_arc(p) : -1;
+    for (int a : g_.out_arcs(p)) {
+        unsigned char v = 0;
+        if (pre) {
+            if (have_witness_) v = (a == a_psi) ? 0 : 1;
+            else v = g_.is_terminal(g_.arc(a).head) ? 0 : 1;
+        }
+        penalty_[a] = v;
+    }
+}
+
+void GLWeightedSolver::penalty_recompute_all() {
+    penalty_.assign(g_.num_arc_ids(), 0);
+    for (int v : g_.live_nonterminals()) penalty_set_vertex(v);
+}
+
+// C1 re-routing pass, as in GLSolver (once, right after the initial split witness); like there it recomputes
+// the offending flows from scratch, so their cuts come back exact.
+void GLWeightedSolver::penalty_reroute_offenders() {
+    if (!opt_.routing_avoid) return;
+    if (!reroute_pass_) return;
+    Stats::Timer timer(stats_, "c1_reroute");
+    std::vector<int> offenders;
+    for (int a = 0; a < g_.num_arc_ids(); ++a) {
+        if (!g_.arc(a).alive || a >= (int)penalty_.size() || !penalty_[a]) continue;
+        for (int v : oracle_.users_of_arc(a)) offenders.push_back(v);
+    }
+    std::sort(offenders.begin(), offenders.end());
+    offenders.erase(std::unique(offenders.begin(), offenders.end()), offenders.end());
+    oracle_.reroute(offenders);  // counts stats_.reroutes
+}
+
+int64_t GLWeightedSolver::penalized_users() {
+    int64_t total = 0;
+    for (int a = 0; a < g_.num_arc_ids(); ++a)
+        if (g_.arc(a).alive && a < (int)penalty_.size() && penalty_[a]) total += (int64_t)oracle_.num_users_of_arc(a);
+    return total;
+}
+
+void GLWeightedSolver::penalty_debug_check(const char* where) {
+    if (!opt_.routing_avoid) return;  // nothing is maintained when the option is off
+    std::vector<unsigned char> mine(penalty_);
+    penalty_recompute_all();
+    for (int a = 0; a < g_.num_arc_ids(); ++a) {
+        if (!g_.arc(a).alive) continue;
+        const unsigned char got = a < (int)mine.size() ? mine[a] : (unsigned char)0;
+        if (got != penalty_[a])
+            throw std::logic_error(std::string("C1 penalty out of sync after ") + where + ": arc " + vs(a) + " (" +
+                                   vs(g_.arc(a).tail) + "," + vs(g_.arc(a).head) + ") is " + vs(got) + ", recomputed " +
+                                   vs(penalty_[a]));
+    }
 }
 
 void GLWeightedSolver::mark_candidate_dirty(int v) {
@@ -372,6 +446,7 @@ void GLWeightedSolver::set_psi_single(int p, int ti) {
     psi_[p].emplace_back(ti, w_[p]);
     recv_[ti] += w_[p];
     mark_candidate_dirty(p);
+    penalty_update_vertex(p);  // C1: the kept arc of p is now (p, t_i)
 }
 
 // "essential" event (§14): exact sets (every cut refreshed first; trace mode is for small instances).
@@ -445,6 +520,7 @@ void GLWeightedSolver::check_after_operation(const char* where) {
     if (!opt_.debug_asserts) return;
     Stats::Timer timer(stats_, "debug_checks");
     debug_check_witness(where);
+    penalty_debug_check(where);  // C1: incremental maintenance vs. a full recomputation
     if (!fesac_feasible(true))
         throw std::logic_error(std::string("FESAC violated after ") + where + " [Lem 8.1/8.2/8.5/8.8]");
 }
@@ -548,6 +624,7 @@ GLWeightedSolver::SplitOutcome GLWeightedSolver::solve_split_assignment(bool wit
             }
         }
         cand_all_dirty_ = true;  // psi changed everywhere: O1/O5 targets must be recomputed
+        if (have_witness_ && opt_.routing_avoid) penalty_recompute_all();  // C1: every kept arc may have moved
     }
     return out;
 }
@@ -600,6 +677,17 @@ void GLWeightedSolver::delete_and_commit(const std::vector<int>& D, const std::v
         mark_candidate_dirty(g_.arc(a).tail);
         g_.delete_arc(a);
     }
+    if (opt_.routing_avoid) {
+        // C1: the penalty of a SURVIVING arc (u, q) is [u is a pre-terminal] && [(u,q) is not the kept arc],
+        // and both depend only on the arcs from u into terminals; so a tail needs no work unless one of the
+        // deleted arcs entered a terminal (it may have been the kept arc, or u's last arc into a terminal).
+        std::vector<int> tails;
+        for (int a : D)
+            if (g_.is_terminal(g_.arc(a).head)) tails.push_back(g_.arc(a).tail);
+        std::sort(tails.begin(), tails.end());
+        tails.erase(std::unique(tails.begin(), tails.end()), tails.end());
+        for (int u : tails) penalty_update_vertex(u);
+    }
     oracle_.commit_deletion(D, affected, out);
     for (int v : affected) {
         mark_flow_arcs_dirty(v);  // the rerouted paths gained users
@@ -629,6 +717,7 @@ bool GLWeightedSolver::step_remove_zero_terminal() {
         Stats::Timer timer(stats_, "terminal_removal");
         for (int a : g_.in_arcs(t)) push_degree_changed(g_.arc(a).tail);
         g_.remove_terminal(t);
+        if (opt_.routing_avoid) penalty_recompute_all();  // C1: many vertices stop being pre-terminals at once
         oracle_.after_terminal_removal(t);  // counts stats_.terminal_removals
         cand_all_dirty_ = true;             // every flow may have been rerouted (O4)
         trace_.record("remove_terminal", JsonObject().num("t", t).raw("capacities", capacities_json()).build());
@@ -688,6 +777,8 @@ void GLWeightedSolver::contract_into(int p, int t) {
     mark_candidate_dirty(p);   // dropped from the candidate list at the next refresh
     parent_[p] = g_.contract(p, t);
     oracle_.after_contraction(p, t);  // O3; counts stats_.contractions
+    penalty_update_vertex(p);                               // C1: p is dead, its in-neighbours gained (u,t)
+    for (int u : preds) penalty_update_vertex(u);
     cap_[ti] -= w_[p];
     recv_[ti] -= w_[p];
     psi_[p].clear();
@@ -1105,7 +1196,11 @@ void GLWeightedSolver::step_round_and_remove() {
             push_pt_candidate(g_.arc(a).tail);  // keeps the candidate bookkeeping dirty for these tails
         }
         mark_candidate_dirty(p);
+        std::vector<int> in_tails;
+        for (int a : g_.in_arcs(p)) in_tails.push_back(g_.arc(a).tail);
         g_.remove_vertex(p);
+        penalty_update_vertex(p);  // C1: p is dead; its in-neighbours may have stopped being pre-terminals
+        for (int u : in_tails) penalty_update_vertex(u);
         oracle_.after_vertex_removal(p);
     }
     for (int t : S) {
@@ -1115,6 +1210,7 @@ void GLWeightedSolver::step_round_and_remove() {
                                    " units from surviving vertices");
         for (int a : g_.in_arcs(t)) push_degree_changed(g_.arc(a).tail);
         g_.remove_terminal(t);
+        if (opt_.routing_avoid) penalty_recompute_all();  // C1
         oracle_.after_terminal_removal(t);  // counts stats_.terminal_removals; recomputes every cut (O4)
     }
     cand_all_dirty_ = true;
@@ -1148,10 +1244,15 @@ SolveResult GLWeightedSolver::run() {
                       " but the capacities sum to " + vs(total_cap) + " [Def 5.3]" + guarantee;
         return res;
     }
+    // C1 (RESEARCH_NOTES E5): the penalty array is built before the first flows and maintained in both
+    // modes (the diagnostics must be comparable); only "avoid" hands it to the oracle. See GLSolver::run.
+    penalty_recompute_all();
+    if (opt_.routing_avoid) oracle_.set_penalties(&penalty_);
     {
         Stats::Timer t(stats_, "compute_all");
         oracle_.compute_all();
     }
+    stats_.penalized_users_initial = penalized_users();
     res.k_T_connected = true;
     int bad = -1;
     std::vector<int> empty_ess;
@@ -1176,6 +1277,10 @@ SolveResult GLWeightedSolver::run() {
             return res;
         }
         trace_.record("min_cost_split", JsonObject().raw("psi", psi_json()).num("cost", 0).build());
+        have_witness_ = true;
+        penalty_recompute_all();  // C1: the kept arc of every pre-terminal p is now its psi target
+        penalty_reroute_offenders();
+        stats_.penalized_users_witness = penalized_users();
     }
     for (int i = 0; i < k; ++i)
         if (cap_[i] == 0) zero_terms_.push_back(i);

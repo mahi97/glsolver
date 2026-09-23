@@ -26,6 +26,19 @@ struct Stats {
     int64_t shift_calls = 0;
     int64_t assignment_repairs = 0;   // witness recomputations
     int64_t steps = 0;
+    // C1 diagnostics (RESEARCH_NOTES E5). flow_repairs: stored flows re-validated by evaluate_deletion
+    // (summed over all calls, speculative O5 attempts included) - "repairs per deletion" is this over
+    // `deletions`. NOT independent of augment_calls: each repaired flow drops the paths through the deleted
+    // arcs and re-augments once per dropped path (plus at most one failing call), so where almost every
+    // affected flow loses exactly one path (the Harary family) the two counters nearly coincide -- quote
+    // them together as one signal, not as two. penalized_users_initial / _witness: the number of stored flows using an arc a pre-terminal
+    // is likely to lose, summed over those arcs, measured right after compute_all (no witness yet, so
+    // "likely to lose" = every out-arc of a pre-terminal that does not enter a terminal) and again right
+    // after the initial witness (= every out-arc of a pre-terminal p other than (p, phi(p))).
+    int64_t flow_repairs = 0;
+    int64_t reroutes = 0;             // flows recomputed by the C1 re-routing pass
+    int64_t penalized_users_initial = 0;
+    int64_t penalized_users_witness = 0;
     std::map<std::string, double> time_seconds;  // per primitive
     std::vector<std::pair<int, int>> graph_size_over_time;  // (live non-terminals, live arcs) per step
 

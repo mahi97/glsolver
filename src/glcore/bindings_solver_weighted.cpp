@@ -43,6 +43,10 @@ py::dict weighted_stats_to_dict(const Stats& s) {
     d["shift_calls"] = s.shift_calls;
     d["assignment_repairs"] = s.assignment_repairs;
     d["steps"] = s.steps;
+    d["flow_repairs"] = s.flow_repairs;
+    d["reroutes"] = s.reroutes;                          // C1 diagnostics (RESEARCH_NOTES E5)
+    d["penalized_users_initial"] = s.penalized_users_initial;
+    d["penalized_users_witness"] = s.penalized_users_witness;
     py::dict times;
     for (const auto& kv : s.time_seconds) times[py::str(kv.first)] = kv.second;
     d["time_seconds"] = times;
@@ -99,6 +103,20 @@ SolverOptions parse_weighted_options(const py::dict& options) {
     o.trace = get_bool("trace", false);
     o.record_cuts = get_bool("record_cuts", false);
     o.check_precondition = get_bool("check_precondition", true);
+    // C1 routing (RESEARCH_NOTES E5): "bfs" (default, plain BFS augmenting paths) or "avoid" (paths of
+    // minimum total deletion penalty). Both are exact; they differ only in which maximum flow is stored.
+    if (options.contains("routing")) {
+        const py::object v = options[py::str("routing")];
+        std::string r;
+        try {
+            r = v.cast<std::string>();
+        } catch (const py::cast_error&) {
+            throw std::invalid_argument("solve_weighted: option 'routing' must be a str (got " + option_type_name(v) + ")");
+        }
+        if (r == "avoid") o.routing_avoid = true;
+        else if (r != "bfs")
+            throw std::invalid_argument("solve_weighted: option 'routing' must be 'bfs' or 'avoid' (got '" + r + "')");
+    }
     return o;
 }
 
@@ -162,7 +180,7 @@ void bind_solver_weighted(py::module_& m) {
         "witness, k_T_connected, stats, trace). arcs: a numpy integer array of shape (m, 2) (int32 read in place) or a "
         "sequence of (u, v) pairs. GLWeightedPartition [Alg 3] + RoundAndRemove [Alg 4] + MinCostSplitAssignment "
         "[Prop 5.4] with the exact optimizations O1–O9 (docs/optimizations.md); weights[v] >= 1 for non-terminals (terminal "
-        "entries are ignored). options keys: threads, seed, greedy_contraction, lazy_shift, batch_unused_arcs, debug_asserts, "
+        "entries are ignored). options keys: threads, seed, routing ('bfs'|'avoid'), greedy_contraction, lazy_shift, batch_unused_arcs, debug_asserts, "
         "trace, record_cuts, check_precondition. status is 'ok', 'precondition_failed' (FESAC fails; a partition may still "
         "exist) or 'error' (the C++ exception message: invalid input, a malformed option value or an invariant violation; "
         "never raised). On a non-ok status assignment, parent and witness are empty lists; on 'ok' witness is -1 everywhere: "

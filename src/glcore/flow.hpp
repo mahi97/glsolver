@@ -5,6 +5,9 @@
 // flags, both restricted to the arcs/vertices touched (so reset is O(size)). The engine supports:
 //   * from scratch:  compute_max_flow(v) -> kappa augmentations (BFS), O(k (n+m))
 //   * warm start:    remove_paths_using_arcs / remove_path_to_terminal, then augment_once, O(n+m)
+//   * deletion-aware routing (RESEARCH_NOTES C1/E5): with an optional per-arc penalty byte the augmenting
+//     search becomes a 0-1 shortest-path search that prefers paths of minimum total penalty (same residual
+//     moves, hence the same kappa and the same unique tightest cut)
 //   * tightest cut:  compute_cut() reverse BFS in the residual graph -> Ess bitset (exact) and, on request
 //                    only, the L/S/R side of every vertex (n bytes per flow: never stored by default)
 // All operations read the *current* Graph; a VertexFlow is only meaningful for the graph version it was
@@ -91,9 +94,40 @@ public:
     // must be recomputed). Must be called after Graph::contract(p, t).
     bool translate_path_after_contraction(VertexFlow& f, size_t i, size_t j, int p, int t) const;
 
+    // ---- deletion-aware routing (C1), an option of the solvers -------------------------------------------
+    // `pen` is a per-arc byte array (index = arc id; a shorter array reads as 0 beyond its end) OWNED BY THE
+    // CALLER: 1 marks an arc the algorithm is likely to delete (an out-arc of a live pre-terminal other than
+    // the one into the terminal it is assigned to), 0 every other arc. When set, every augmenting search
+    // (compute_max_flow and the warm-started augment_once) returns a path of MINIMUM TOTAL PENALTY, ties
+    // broken by the plain BFS order; nullptr (the default) restores the plain BFS exactly — the same path,
+    // and no penalty test in its loops (the two searches are separate instantiations of one template, and
+    // the 0-1 arrays `dist` / `queue_next` are allocated only by the penalized one). "No extra work in the
+    // loop" is not the same as "no cost": how the two instantiations are laid out decides several percent
+    // of the plain BFS, so any change here must be re-measured against the pre-C1 engine (see the note on
+    // search_plain / search_penalized below and RESEARCH_NOTES E5-review).
+    // Exactness: the search explores exactly the residual moves it explored before, so it finds an augmenting
+    // path iff one exists; the resulting flow has the same value kappa, and compute_cut derives the (unique,
+    // [Def 3.8]) tightest cut from residual reachability of a MAXIMUM flow, so kappa, Ess and every derived
+    // decision are independent of which maximum flow is stored. Only which arcs are "used" changes.
+    // Not thread-safe against the parallel searches: set it only between them (the oracle does).
+    void set_penalties(const std::vector<unsigned char>* pen) { pen_ = pen; }
+    const std::vector<unsigned char>* penalties() const { return pen_; }
+
     const Graph& graph() const { return g_; }
 private:
     const Graph& g_;
+    const std::vector<unsigned char>* pen_ = nullptr;
+    // One augmenting search; returns the target node (a terminal in-node) or -1. Penalized = false is the
+    // plain BFS (all weights 0, first discovery wins), Penalized = true the 0-1 search.
+    template <bool Penalized>
+    int search_target(const VertexFlow& f, Scratch& s) const;
+    // The two instantiations are reached through these never-inlined entry points. Measured requirement, not
+    // style: when augment_once inlines the plain search and calls the penalized one, the PLAIN search runs
+    // 6-19 % slower than the pre-C1 engine (same instructions; register pressure / i-cache in a function that
+    // now holds two searches plus the augmentation). With both searches outlined the plain BFS is 4-10 % FASTER
+    // than the pre-C1 engine, which inlined its single search into augment_once. See RESEARCH_NOTES E5-review.
+    int search_plain(const VertexFlow& f, Scratch& s) const;
+    int search_penalized(const VertexFlow& f, Scratch& s) const;
     void rebuild_paths(VertexFlow& f, Scratch& s) const;          // explicit paths from the flag state
     void remove_path(VertexFlow& f, size_t i, Scratch& s) const;  // clear flags of path i and drop it
 };

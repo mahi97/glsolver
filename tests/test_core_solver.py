@@ -519,6 +519,7 @@ def test_graph_size_series_is_monotone_and_bounded() -> None:
 BAD_OPTION_VALUES = [
     ("threads", "x"), ("threads", None), ("threads", 1.5), ("threads", 2**40), ("seed", [1]),
     ("trace", "x"), ("debug_asserts", object()), ("greedy_contraction", {}),
+    ("routing", "nonsense"), ("routing", 5), ("routing", None),
 ]
 
 
@@ -603,3 +604,88 @@ def test_p2_subset_contains_phi_after_cycle_shift_then_deletion() -> None:
     out = _core.solve_general(c["n"], c["arcs"], c["terminals"], c["capacities"],
                               {"threads": 1, "greedy_contraction": True, "lazy_shift": False, "batch_unused_arcs": False})
     assert out["status"] == "ok" and out["stats"]["cycle_shifts"] >= 3, out["message"]
+
+
+# ---------------------------------------------------------------------------
+# 10. C1 deletion-aware routing, options["routing"] = "avoid" (RESEARCH_NOTES E5)
+# ---------------------------------------------------------------------------
+ROUTING_POOL = small_pool(60, seed=915, n_max=22)
+ROUTING_REF_POOL = small_pool(30, seed=916, n_max=13)
+
+
+def test_routing_avoid_matches_bfs_on_kappa_ess_and_status() -> None:
+    """``routing="avoid"`` routes the stored certificates around the arcs the algorithm is likely to delete.
+    It only decides WHICH maximum flow is stored: the value kappa and the (unique, [Def 3.8]) tightest cut,
+    hence Ess and every criticality decision, are unchanged.  So the status must agree with ``routing="bfs"``,
+    the exact per-vertex kappa/Ess of the first ``essential`` trace event must be identical in both modes, and
+    the partition must be valid (it may legitimately differ)."""
+    differing = 0
+    checked = 0
+    for inst in ROUTING_POOL:
+        ra = solve(inst, options={"routing": "avoid"}, threads=2, trace=True)
+        rb = solve(inst, options={"routing": "bfs"}, threads=2, trace=True)
+        assert ra.status == rb.status, (inst.name, ra.status, rb.status, ra.message)
+        assert ra.stats["k_T_connected"] == rb.stats["k_T_connected"], inst.name
+        ea = next(e for e in ra.trace if e["type"] == "essential")
+        eb = next(e for e in rb.trace if e["type"] == "essential")
+        assert ea["kappa"] == eb["kappa"], inst.name
+        assert ea["ess"] == eb["ess"], inst.name
+        checked += 1
+        if ra.status != "ok":
+            continue
+        assert_valid(ra, inst, (inst.name, "avoid"))
+        check_arborescence(inst, ra)
+        differing += [sorted(p) for p in ra.parts] != [sorted(p) for p in rb.parts]
+    assert checked == len(ROUTING_POOL)
+    assert 0 <= differing <= len(ROUTING_POOL)
+
+
+def test_routing_avoid_essential_sets_match_the_definition() -> None:
+    """The stored sets of the penalized routing are the exact Ess_G(v) of [Def 4.1] (computed independently
+    by ``glsolver.preconditions``), i.e. the option cannot make the oracle wrong."""
+    for inst in ROUTING_REF_POOL:
+        res = solve(inst, options={"routing": "avoid"}, threads=2, trace=True)
+        by_def = essential_sets_by_definition(inst)
+        ev = next(e for e in res.trace if e["type"] == "essential")
+        assert {int(v): set(ts) for v, ts in ev["ess"].items()} == by_def, inst.name
+        if res.status == "ok":
+            assert_valid(res, inst, (inst.name, "avoid-ref"))
+
+
+def test_routing_avoid_debug_asserts_and_determinism() -> None:
+    """With ``debug_asserts`` the core also re-verifies the incremental maintenance of the per-arc penalty
+    array against a full recomputation after every operation (A1-A8 plus the C1 check), and the result stays
+    deterministic across thread counts."""
+    for inst in DET_POOL[:15]:
+        rd = solve(inst, options={"routing": "avoid"}, threads=2, debug=True)
+        assert_valid(rd, inst, (inst.name, "debug"))
+        # determinism across thread counts (debug mode refreshes cuts and therefore legitimately takes
+        # different FEAC-preserving decisions, so it is compared against itself only)
+        r1 = solve(inst, options={"routing": "avoid"}, threads=1)
+        r8 = solve(inst, options={"routing": "avoid"}, threads=8)
+        assert r1.status == "ok" and r1.parts == r8.parts, inst.name
+        assert_valid(r1, inst, inst.name)
+        keys = ("steps", "contractions", "deletions", "cycle_shifts", "augment_calls", "cut_calls", "flow_repairs")
+        assert {k: r1.stats[k] for k in keys} == {k: r8.stats[k] for k in keys}, inst.name
+
+
+def test_routing_diagnostics_are_reported_in_both_modes() -> None:
+    """The two C1 diagnostics are measured in both modes (the comparison must be meaningful) and count what
+    they claim: ``penalized_users_*`` is 0 exactly when no stored flow uses an arc a pre-terminal may lose,
+    and ``flow_repairs`` is the number of stored flows re-validated by the deletion evaluations."""
+    inst = generators.harary_graph(120, 4, seed=2)
+    stats = {}
+    for routing in ("bfs", "avoid"):
+        res = solve(inst, options={"routing": routing}, threads=2)
+        assert_valid(res, inst, routing)
+        st = res.stats
+        for key in ("flow_repairs", "penalized_users_initial", "penalized_users_witness"):
+            assert isinstance(st[key], int) and st[key] >= 0, (routing, key)
+        assert st["flow_repairs"] > 0  # Harary: every deletion re-validates many stored flows
+        stats[routing] = st
+    # the penalized routing never increases the number of users of penalized arcs it starts from
+    assert stats["avoid"]["penalized_users_initial"] <= stats["bfs"]["penalized_users_initial"]
+    # a line with no pre-terminal risk at all: a star has every non-terminal adjacent only to the terminal
+    star = make_instance(5, [(v, 4) for v in range(4)], [4], [4], directed=True)
+    res = solve(star, options={"routing": "avoid"})
+    assert res.status == "ok" and res.stats["penalized_users_witness"] == 0

@@ -54,6 +54,15 @@ public:
     void after_terminal_removal(int t);
     // Vertex removed (rounding): drop its flow; flows passing through it are recomputed lazily.
     void after_vertex_removal(int v);
+    // C1 deletion-aware routing: hand the engine the solver's per-arc penalty array (nullptr = plain BFS).
+    // The array is read by every augmenting search, including inside the parallel regions, so the owner may
+    // only change it between oracle calls. Exactness: see FlowEngine::set_penalties.
+    void set_penalties(const std::vector<unsigned char>* pen) { engine_.set_penalties(pen); }
+    // C1 re-routing: recompute the stored flows of `verts` from scratch (in parallel, with exact cuts) under
+    // the current penalties. Exact for the same reason compute_all is: a from-scratch maximum flow with its
+    // tightest cut. kappa and Ess are unchanged, only which arcs the certificates use. Returns the number of
+    // flows actually recomputed.
+    size_t reroute(const std::vector<int>& verts);
 
     Graph& graph() { return g_; }
 private:

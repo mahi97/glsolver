@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -98,8 +99,21 @@ struct PyEssentialOracle {
     std::vector<int> pending_affected;
     std::vector<VertexFlow> pending_out;
     bool has_pending = false;
+    // C1 penalties, owned here: FlowEngine keeps a raw pointer to the caller's array, so the array must
+    // outlive every search. Python hands in a copy, which lives exactly as long as this oracle.
+    std::vector<unsigned char> penalties;
 
     PyEssentialOracle(Graph& g_, int threads, int seed) : g(g_), oracle(g_, stats, threads, seed) {}
+
+    void set_penalties(const std::vector<unsigned char>* pen) {
+        if (pen == nullptr) {
+            oracle.set_penalties(nullptr);
+            penalties.clear();
+            return;
+        }
+        penalties = *pen;
+        oracle.set_penalties(&penalties);
+    }
 
     std::vector<int> evaluate(const std::vector<int>& D, bool exact_cuts) {
         pending_D = D;
@@ -185,16 +199,21 @@ void bind_graph_flow(py::module_& m) {
         .def("check_invariants", &Graph::check_invariants);
 
     // [Prop 4.2]: (kappa, sides {vertex: 'L'|'S'|'R'}, ess [original terminal indices], paths [vertex lists])
-    m.def("tightest_cut", [](const Graph& g, int v) {
+    // `penalties` (C1 deletion-aware routing, RESEARCH_NOTES P4/E5) is an optional per-arc byte array
+    // (index = arc id, values 0/1, a short array reads as 0 beyond its end): with it the augmenting searches
+    // return paths of minimum total penalty instead of BFS-shortest ones. kappa, the sides and Ess must come
+    // out identical — that is P4, and this argument is what lets a test check it path by path.
+    m.def("tightest_cut", [](const Graph& g, int v, std::optional<std::vector<unsigned char>> penalties) {
         VertexFlow f;
         {
             py::gil_scoped_release release;
             FlowEngine engine(g);
+            if (penalties) engine.set_penalties(&*penalties);
             auto s = engine.make_scratch();
             engine.compute_max_flow(v, f, *s, true, true);
         }
         return py::make_tuple(f.kappa, sides_dict(g, f.side), f.ess.to_list(), paths_as_vertices(g, f));
-    }, py::arg("graph"), py::arg("v"));
+    }, py::arg("graph"), py::arg("v"), py::arg("penalties") = py::none());
 
     py::class_<PyEssentialOracle>(m, "EssentialOracle",
                                   "Per-vertex flows / essential sets with the warm-start hooks of docs/optimizations.md")
@@ -204,6 +223,15 @@ void bind_graph_flow(py::module_& m) {
             py::gil_scoped_release release;
             o.oracle.compute_all();
         })
+        .def("set_penalties", [](PyEssentialOracle& o, std::optional<std::vector<unsigned char>> pen) {
+            // C1: None restores the plain BFS. The array is copied into the oracle (the engine holds a raw
+            // pointer to it), so it stays alive for every later search; it is read by the searches only, so
+            // changing it between calls is what the solvers do too.
+            if (pen && pen->size() > (size_t)o.g.num_arc_ids())
+                throw std::invalid_argument("penalties: " + std::to_string(pen->size()) + " entries for " +
+                                            std::to_string(o.g.num_arc_ids()) + " arc ids");
+            o.set_penalties(pen ? &*pen : nullptr);
+        }, py::arg("penalties"))
         .def("kappa", [](PyEssentialOracle& o, int v) { return o.oracle.kappa(v); })
         .def("ess", [](PyEssentialOracle& o, int v) { return o.oracle.ess(v).to_list(); })
         .def("cut_exact", [](PyEssentialOracle& o, int v) { return o.oracle.flow(v).cut_exact; })

@@ -39,6 +39,8 @@ struct FlowEngine::Scratch {
     uint32_t gen = 0;
     std::vector<int> parent_node, parent_arc; // BFS tree: predecessor node and the arc used (-1 = split move)
     std::vector<int> queue;
+    std::vector<int> queue_next;              // 0-1 search only: the nodes of the next penalty level
+    std::vector<int> dist;                    // 0-1 search only: penalty distance (valid iff stamp == gen)
     std::vector<int> touched_arcs, touched_vertices;
     int num_flow_arcs = 0;                    // arcs carrying the flow bit
     int loaded_v = -1;                        // source vertex of the flow currently loaded (-1 = none)
@@ -224,49 +226,144 @@ void FlowEngine::rebuild_paths(VertexFlow& f, Scratch& s) const {
 //   from x_in : forward split (through[x] == 0)                   -> x_out;
 //               reverse arc (w,x) with flow 1, not forbidden       -> w_out.
 // Reaching y_in for a terminal y with through[y] == 0 completes the path (y_in -> y_out -> z).
-bool FlowEngine::augment_once(VertexFlow& f, Scratch& s, const std::vector<int>& forbidden) const {
-    require_loaded(s, f, "augment_once");
-    ensure_arc_capacity(s, g_);
+//
+// Deletion-aware routing (C1, `set_penalties`). With Penalized = true the search is a 0-1 shortest-path
+// search whose length is the total penalty of the FORWARD arcs of the path (a reverse residual move removes
+// an arc from the flow and costs 0). Instead of a deque (whose push_front would turn the penalty-0 part of
+// the search into a depth-first order) the frontier is two FIFOs: `queue` holds the current penalty level,
+// `queue_next` the next one; a penalty-0 move appends to the current level, a penalty-1 move to the next.
+// Levels are therefore searched in plain BFS order, which (a) breaks ties between equal-penalty paths exactly
+// as the old BFS did and (b) makes the all-zero-penalty case bit-identical to it. A node may be relabelled
+// when a cheaper level reaches it; `dist` holds its current label and a stale queue entry (dist != level) is
+// skipped. The first target found by a penalty-0 move at the current level is optimal (every unsettled node
+// has distance >= level); a target first reached by a penalty-1 move is remembered and returned when the
+// current level is exhausted, which is again the first target in the order the plain BFS would have used.
+template <bool Penalized>
+int FlowEngine::search_target(const VertexFlow& f, Scratch& s) const {
     const int v = f.v;
-    mark_forbidden(s, forbidden, g_);
     s.next_gen();
     s.queue.clear();
     const int src = node_out(v);
     s.mark(src, -1, -1);
     s.queue.push_back(src);
-    int target = -1;
-    for (size_t head = 0; head < s.queue.size() && target < 0; ++head) {
-        const int node = s.queue[head];
-        const int x = node_vertex(node);
-        if (node_is_out(node)) {
-            for (int a : g_.out_arcs(x)) {
-                if (s.arc_bits[a]) continue;  // flow 1 (dead end) or forbidden
-                const int y = g_.arc(a).head;
-                if (y == v) continue;  // never route flow into the source
-                const int yin = node_in(y);
-                if (s.visited(yin)) continue;
-                s.mark(yin, node, a);
-                if (!s.through[y] && g_.is_terminal(y)) { target = yin; break; }
-                s.queue.push_back(yin);
-            }
-            if (target >= 0) break;
-            if (x != v && s.through[x]) {
-                const int xin = node_in(x);
-                if (!s.visited(xin)) { s.mark(xin, node, -1); s.queue.push_back(xin); }
-            }
+    const unsigned char* pen = nullptr;
+    int pen_n = 0;
+    int target = -1, pending = -1, level = 0;
+    if constexpr (Penalized) {
+        // The 0-1 arrays are sized here, not in new_scratch: the plain BFS never allocates them.
+        if (s.dist.size() < (size_t)(2 * s.n)) s.dist.assign((size_t)(2 * s.n), 0);
+        s.queue_next.clear();
+        s.dist[src] = 0;
+        pen = pen_->data();
+        pen_n = (int)pen_->size();
+    }
+    // Label `to` at distance level + w if that is an improvement (or the first visit).
+    auto relax = [&](int to, int from, int arc, int w) -> bool {
+        if constexpr (Penalized) {
+            if (s.visited(to) && s.dist[to] <= level + w) return false;
+            s.mark(to, from, arc);
+            s.dist[to] = level + w;
+            return true;
         } else {
-            if (!s.through[x]) {
-                const int xout = node_out(x);
-                if (!s.visited(xout)) { s.mark(xout, node, -1); s.queue.push_back(xout); }
+            (void)w;
+            if (s.visited(to)) return false;
+            s.mark(to, from, arc);
+            return true;
+        }
+    };
+    // The scan of one penalty level. `head` is declared INSIDE the level loop (it restarts at 0 on every
+    // level: a level swaps in a fresh queue), which keeps the inner loop exactly the plain BFS loop of the
+    // pre-C1 engine. This is a measured requirement, not a style choice: hoisting `head` out of the level
+    // loop costs the plain BFS ~19 % (gcc 13.3 -O3, aarch64) although the emitted work is the same —
+    // RESEARCH_NOTES E5-review. With Penalized = false the level loop itself collapses (the `else break;`).
+    for (;;) {
+        for (size_t head = 0; head < s.queue.size() && target < 0; ++head) {
+            const int node = s.queue[head];
+            if constexpr (Penalized) {
+                if (s.dist[node] != level) continue;  // superseded by a cheaper label
+            }
+            const int x = node_vertex(node);
+            if (node_is_out(node)) {
+                for (int a : g_.out_arcs(x)) {
+                    if (s.arc_bits[a]) continue;  // flow 1 (dead end) or forbidden
+                    const int y = g_.arc(a).head;
+                    if (y == v) continue;  // never route flow into the source
+                    const int yin = node_in(y);
+                    int w = 0;
+                    if constexpr (Penalized) {
+                        // A node already labelled at this level cannot be improved by any weight >= 0: skip it
+                        // before reading the penalty byte, which is a second random access per arc (on dense
+                        // graphs almost every arc leads to an already-labelled node).
+                        if (s.visited(yin) && s.dist[yin] <= level) continue;
+                        w = (a < pen_n) ? (int)pen[a] : 0;
+                    }
+                    if (!relax(yin, node, a, w)) continue;
+                    if (!s.through[y] && g_.is_terminal(y)) {
+                        if (w == 0) { target = yin; break; }
+                        if constexpr (Penalized) {
+                            if (pending < 0) pending = yin;
+                        }
+                        continue;
+                    }
+                    if constexpr (Penalized) (w == 0 ? s.queue : s.queue_next).push_back(yin);
+                    else s.queue.push_back(yin);
+                }
+                if (target >= 0) break;
+                if (x != v && s.through[x]) {
+                    const int xin = node_in(x);
+                    if (relax(xin, node, -1, 0)) s.queue.push_back(xin);
+                }
             } else {
-                for (int a : g_.in_arcs(x)) {
-                    if (s.arc_bits[a] != FlowEngine::Scratch::kFlow) continue;  // needs flow 1 and not forbidden
-                    const int wout = node_out(g_.arc(a).tail);
-                    if (!s.visited(wout)) { s.mark(wout, node, a); s.queue.push_back(wout); }
+                if (!s.through[x]) {
+                    const int xout = node_out(x);
+                    if (relax(xout, node, -1, 0)) s.queue.push_back(xout);
+                } else {
+                    for (int a : g_.in_arcs(x)) {
+                        if (s.arc_bits[a] != FlowEngine::Scratch::kFlow) continue;  // needs flow 1 and not forbidden
+                        const int wout = node_out(g_.arc(a).tail);
+                        if (relax(wout, node, a, 0)) s.queue.push_back(wout);
+                    }
                 }
             }
         }
+        // Advance to the next penalty level (Penalized only; the plain BFS leaves the loop here).
+        if constexpr (Penalized) {
+            if (target >= 0) break;
+            if (pending >= 0) { target = pending; break; }  // level exhausted: the penalty-1 target wins
+            if (s.queue_next.empty()) break;
+            s.queue.swap(s.queue_next);
+            s.queue_next.clear();
+            ++level;
+        } else {
+            break;
+        }
     }
+    return target;
+}
+
+// Keeping both searches out of augment_once is a measured requirement, not a style choice: see flow.hpp.
+#if defined(__GNUC__) || defined(__clang__)
+#define GLCORE_NOINLINE [[gnu::noinline]]
+#else
+#define GLCORE_NOINLINE
+#endif
+GLCORE_NOINLINE int FlowEngine::search_plain(const VertexFlow& f, Scratch& s) const {
+    return search_target<false>(f, s);
+}
+GLCORE_NOINLINE int FlowEngine::search_penalized(const VertexFlow& f, Scratch& s) const {
+    return search_target<true>(f, s);
+}
+#undef GLCORE_NOINLINE
+
+bool FlowEngine::augment_once(VertexFlow& f, Scratch& s, const std::vector<int>& forbidden) const {
+    require_loaded(s, f, "augment_once");
+    ensure_arc_capacity(s, g_);
+    const int v = f.v;
+    mark_forbidden(s, forbidden, g_);
+    // Two instantiations: with pen_ == nullptr the plain BFS runs, with no penalty test in its loops; both
+    // are called, never inlined here (flow.hpp explains the measurement that forced that).
+    const int target = pen_ ? search_penalized(f, s) : search_plain(f, s);
+    const int src = node_out(v);
     unmark_forbidden(s, forbidden);
     if (target < 0) return false;
     // Augment: flip the flags along the tree path target -> src. next_arc is kept consistent in either
