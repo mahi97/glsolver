@@ -216,6 +216,33 @@ def ilp_partition(
     if res.status == 0:
         return "ok", idx.decode(res.x, inst.terminals)
     if res.status == 2:
+        # An "infeasible" verdict from this oracle is used as *proof* that no
+        # partition exists, so never propagate the solver's word for it without
+        # a second opinion: the HiGHS shipped with scipy 1.15.3 reports
+        # Infeasible on models that are demonstrably feasible (reproduced on an
+        # 8-vertex directed instance whose partition brute force finds, and
+        # which the same HiGHS solves to optimality once presolve is off; newer
+        # scipy solves it either way).  Re-solve once without presolve and only
+        # believe the verdict if it survives.
+        confirm = dict(options)
+        confirm["presolve"] = False
+        res2 = milp(
+            c_obj,
+            constraints=[cons] if cons is not None else None,
+            integrality=integrality,
+            bounds=bounds,
+            options=confirm,
+        )
+        if res2.status == 0 and res2.x is not None:
+            parts = idx.decode(res2.x, inst.terminals)
+            if _is_valid(inst, parts):
+                return "ok", parts
+        if res2.status == 1:
+            if res2.x is not None:
+                parts = idx.decode(res2.x, inst.terminals)
+                if _is_valid(inst, parts):
+                    return "ok", parts
+            return "timeout", None
         return "infeasible", None
     if res.status == 1:
         # A feasible incumbent found before the limit is still a valid answer

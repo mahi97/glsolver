@@ -1,0 +1,86 @@
+{
+ "capacities": [
+  5,
+  1
+ ],
+ "directed": true,
+ "edges": [
+  [
+   1,
+   0
+  ],
+  [
+   1,
+   2
+  ],
+  [
+   2,
+   1
+  ],
+  [
+   2,
+   3
+  ],
+  [
+   3,
+   2
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   4,
+   3
+  ],
+  [
+   4,
+   5
+  ],
+  [
+   6,
+   5
+  ],
+  [
+   6,
+   7
+  ],
+  [
+   7,
+   0
+  ],
+  [
+   7,
+   6
+  ]
+ ],
+ "meta": {
+  "base_family": "sparse_k_connected",
+  "chords": 1,
+  "claims_kT_connected": true,
+  "claims_k_connected": true,
+  "connectivity_verified": true,
+  "drop_fraction": 0.5,
+  "dropped": 1,
+  "family": "directed_variant",
+  "k": 2,
+  "mode": "unbalanced",
+  "n": 8,
+  "proposed": 8,
+  "seed": 101
+ },
+ "n": 8,
+ "name": "sparse_k_connected_n8_k2_s101_directed_s101",
+ "regression": {
+  "created": "2026-09-23T13:13:06.489353+00:00",
+  "found": "2026-09-23",
+  "hash": "9082dc3689aa",
+  "reason": "HiGHS presolve in scipy 1.15.3 reports this feasible instance as infeasible; the MILP oracle must confirm infeasibility with presolve off before reporting it. Brute force finds a partition.",
+  "scipy_affected": "1.15.3"
+ },
+ "terminals": [
+  0,
+  5
+ ],
+ "weights": null
+}
