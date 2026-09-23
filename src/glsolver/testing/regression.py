@@ -4,13 +4,43 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterator
 
 from glsolver.instance import Instance
 from glsolver.io import instance_from_dict, instance_to_dict
 
-REGRESSION_DIR = Path(__file__).resolve().parents[3] / "regression"
+
+def _find_regression_dir() -> Path:
+    """Locate the repository's ``regression/`` directory.
+
+    ``Path(__file__).parents[3]`` only works for a source checkout / editable
+    install; a wheel install puts this module under ``site-packages``, where
+    that path is meaningless.  Resolve in order: the ``GLSOLVER_REGRESSION_DIR``
+    environment variable, the first ancestor of this file that looks like the
+    repository (``pyproject.toml`` + ``regression/``), the same search from the
+    current working directory (a checkout tested against an installed wheel,
+    which is how CI runs), and finally ``./regression``.
+    """
+    env = os.environ.get("GLSOLVER_REGRESSION_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+
+    def repo_root(start: Path) -> Path | None:
+        for base in (start, *start.parents):
+            if (base / "pyproject.toml").is_file() and (base / "regression").is_dir():
+                return base
+        return None
+
+    for start in (Path(__file__).resolve().parent, Path.cwd().resolve()):
+        root = repo_root(start)
+        if root is not None:
+            return root / "regression"
+    return Path.cwd().resolve() / "regression"
+
+
+REGRESSION_DIR = _find_regression_dir()
 
 
 def instance_hash(inst: Instance) -> str:

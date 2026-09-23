@@ -180,7 +180,7 @@ Target: the two per-operation hotspots of E2 and the memory blow-up, without cha
 operation of the algorithm (every counter — `augment_calls`, `cut_calls`, `cycle_shifts`,
 `greedy_attempts` — is identical before and after on every instance below; the nine differential
 suites are green on the release build (1 909 passed, 16 skipped, four new oracle tests included) and
-under ASan+UBSan (the final code was re-checked under ASan+UBSan after the stage; see E3-verify).
+under ASan+UBSan (the final committed code was re-checked under ASan+UBSan: the seven core suites pass with 0 sanitizer reports, see E3-verify).
 
 What changed (src/glcore/flow.*, essential.*, threadpool.hpp; call sites touched by two lines each):
 
@@ -278,7 +278,7 @@ keys `essential.after_contraction`, `essential.evaluate_deletion`, `essential.co
 
 The optimization agents were interrupted by a usage limit before reporting; their code was kept only
 after it was re-verified from scratch. Whole suite on the release build: **2 585 passed, 16 skipped,
-0 failed** (`pytest -m "not slow" -n 12 --hypothesis-profile=ci tests`). Timings below are my own
+0 failed**; the seven core differential suites also pass under ASan+UBSan with 0 sanitizer reports (`pytest -m "not slow" -n 12 --hypothesis-profile=ci tests`). Timings below are my own
 runs, each in a fresh subprocess reading `ru_maxrss`, 8 threads, `verify=False`, `algorithm="general"`
 (median of 3 for the first row, single runs otherwise), on an otherwise idle machine. The "before"
 column is E2 (the baseline sweep).
