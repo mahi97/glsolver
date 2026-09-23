@@ -23,8 +23,37 @@ jobs:
         run: pip install ".[dev]"
       - name: Lint
         run: ruff check src reference tests benchmarks scripts
-      - name: Unit, property and reference-vs-core tests
-        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci
+      # Split by area so a failure is identifiable from the step name alone:
+      # GitHub exposes step names and conclusions through the public jobs API,
+      # while the logs need authentication.  `if: always()` runs every group,
+      # so one run reports every failing area instead of only the first.
+      - name: "tests: verifier, io, preconditions"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_verify.py tests/test_verify_review.py tests/test_io.py tests/test_preconditions.py tests/test_preconditions_review.py
+      - name: "tests: oracles and generators"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_oracles.py tests/test_oracles_review.py tests/test_generators.py tests/test_generators_review.py
+      - name: "tests: reference solvers"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_reference_primitives.py tests/test_reference_unweighted.py tests/test_reference_weighted.py tests/test_reference_dag.py tests/test_reference_review.py tests/test_compact_counterexample.py
+      - name: "tests: core primitives"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_core_flow.py tests/test_core_dag.py tests/test_core_matching.py tests/test_core_review.py
+      - name: "tests: core solvers"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_core_solver.py tests/test_core_weighted.py tests/test_core_solver_review.py tests/test_core_routing_review.py
+      - name: "tests: api, cli, edge cases, regressions"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_api_cli.py tests/test_edge_cases.py tests/test_regression_store.py
+      - name: "tests: exhaustive and property"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_exhaustive_small.py tests/test_property_solvers.py tests/test_harness_review.py
+      - name: "tests: visualization"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_viz.py tests/test_viz_review.py
+      - name: "tests: benchmark framework"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_benchmarks.py tests/test_benchmarks_review.py
       - name: Verifier self-tests
         run: pytest -q tests/test_verify.py tests/test_verify_review.py -n auto
 
