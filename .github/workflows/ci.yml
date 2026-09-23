@@ -51,9 +51,12 @@ jobs:
       - name: "tests: visualization"
         if: always()
         run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_viz.py tests/test_viz_review.py
-      - name: "tests: benchmark framework"
+      - name: "tests: benchmark framework (runner)"
         if: always()
-        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_benchmarks.py tests/test_benchmarks_review.py
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_benchmarks.py
+      - name: "tests: benchmark framework (review)"
+        if: always()
+        run: pytest -q -m "not slow" -n auto --hypothesis-profile=ci tests/test_benchmarks_review.py
       - name: Verifier self-tests
         run: pytest -q tests/test_verify.py tests/test_verify_review.py -n auto
 

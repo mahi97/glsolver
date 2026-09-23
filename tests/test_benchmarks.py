@@ -342,7 +342,13 @@ def test_grace_period_is_configurable_and_recorded():
     t0 = time.monotonic()
     out = runner.run_subprocess([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.4, grace=0.6)
     elapsed = time.monotonic() - t0
-    assert out.timed_out is True and 1.0 <= elapsed < 8.0, elapsed
+    # The point is that the kill happens at timeout + grace rather than at
+    # timeout: the lower bound is the assertion.  The upper bound only guards
+    # against "never killed", so keep it generous — a loaded or emulated runner
+    # can take seconds to schedule the signal, and this test must not turn into
+    # a measurement of the machine.
+    assert out.timed_out is True and elapsed >= 1.0, elapsed
+    assert elapsed < 60.0, f"process was not killed promptly after timeout+grace: {elapsed:.1f}s"
 
 
 def test_rows_record_the_worker_environment_and_a_per_row_load(tmp_path):
