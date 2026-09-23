@@ -979,6 +979,7 @@ def test_k_above_64_uses_multiword_bitsets() -> None:
 # =====================================================================================================
 # 6. the official counterexample (17 copies) with the greedy contraction on and off
 # =====================================================================================================
+@pytest.mark.perf
 @pytest.mark.slow
 def test_counterexample_copies17_greedy_on_and_off() -> None:
     from glref.counterexample import build_counterexample_instance

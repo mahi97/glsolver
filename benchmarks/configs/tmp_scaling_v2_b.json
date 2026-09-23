@@ -1,0 +1,17 @@
+{
+  "name": "scaling_v2",
+  "description": "v2 stage B: n = 5000 and 10000, seed 1, one timed trial, timeout 900 s, threads 8; harary is now included (the 56 GB memory blow-up of the baseline sweep is fixed).",
+  "families": ["random_regular", "sparse_k_connected", "random_kT_dag", "erdos_renyi", "harary"],
+  "sizes": [5000, 10000],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [1],
+  "variants": ["plain"],
+  "algorithms": ["general", "weighted", "dag", "reference-dag"],
+  "algorithm_limits": {"reference-dag": {"max_n": 10000}},
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 900,
+  "grace": 30,
+  "threads": 8
+}

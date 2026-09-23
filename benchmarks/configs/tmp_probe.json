@@ -1,0 +1,15 @@
+{
+  "name": "tmp_probe",
+  "description": "probe: regenerate harary n=1000 seed 2 and time the general solver once",
+  "families": ["harary"],
+  "sizes": [1000],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [2],
+  "variants": ["plain"],
+  "algorithms": ["general"],
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 600,
+  "threads": 8
+}

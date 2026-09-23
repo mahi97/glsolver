@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import resource
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
@@ -186,7 +187,23 @@ def choose_algorithm(inst: Instance, prefer_core: bool = True) -> str:
 
 
 def _peak_rss_mb() -> float:
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    """Peak resident set of THIS process, in MiB.
+
+    ``ru_maxrss`` is inherited across ``fork``: a process spawned from a large
+    parent reports the parent's footprint (measured: a child of a 3 GB parent
+    reports 2 879 MB while its true peak is 18 MB).  Linux exposes the honest
+    figure as ``VmHWM`` in ``/proc/self/status``; fall back to ``ru_maxrss``
+    elsewhere.
+    """
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmHWM:"):
+                    return float(line.split()[1]) / 1024.0
+    except OSError:
+        pass
+    ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return ru / (1024.0 * 1024.0) if sys.platform == "darwin" else ru / 1024.0
 
 
 def glpartition(

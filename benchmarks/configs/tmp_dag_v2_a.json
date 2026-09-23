@@ -1,0 +1,36 @@
+{
+  "name": "dag_v2",
+  "description": "v2 DAG part A: heap (variant 0) vs linear (variant 1) x {max_residual, round_robin, first} up to n = 10^5, threads 1, repeat 3; reference-dag up to 10^4, general up to 10^3.",
+  "families": [
+    {"name": "random_kT_dag", "sizes": [100, 1000, 10000, 100000], "k": [4]},
+    {"name": "random_kT_dag", "sizes": [1000, 10000, 100000], "k": [16]},
+    {"name": "layered_dag", "sizes": [100, 1000, 10000, 100000], "k": [4]},
+    {"name": "weighted_kT_dag", "sizes": [100, 1000, 10000, 100000], "k": [4]}
+  ],
+  "sizes": [1000],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [1, 2],
+  "variants": ["plain"],
+  "algorithms": ["dag", "reference-dag", "general"],
+  "algorithm_options": {
+    "dag": [
+      {"label": "heap", "dag_variant": 0, "dag_policy": "max_residual"},
+      {"label": "linear", "dag_variant": 1, "dag_policy": "max_residual"},
+      {"label": "heap-rr", "dag_variant": 0, "dag_policy": "round_robin"},
+      {"label": "linear-rr", "dag_variant": 1, "dag_policy": "round_robin"},
+      {"label": "heap-first", "dag_variant": 0, "dag_policy": "first"},
+      {"label": "linear-first", "dag_variant": 1, "dag_policy": "first"}
+    ],
+    "reference-dag": [
+      {"label": "max_residual", "dag_policy": "max_residual"},
+      {"label": "round_robin", "dag_policy": "round_robin"}
+    ]
+  },
+  "algorithm_limits": {"reference-dag": {"max_n": 10000}, "general": {"max_n": 1000}},
+  "repeats": 3,
+  "warmup": 1,
+  "timeout": 900,
+  "threads": 1,
+  "store_parts_max_n": 30
+}

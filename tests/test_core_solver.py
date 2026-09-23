@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from conftest import assert_within
 from glsolver import _core, generators
 from glsolver.api import GLResult, core_available, glpartition
 from glsolver.generators import family_catalog
@@ -450,7 +451,7 @@ def test_trace_shift_events_are_consistent() -> None:
 # ---------------------------------------------------------------------------
 # 7. the official counterexample
 # ---------------------------------------------------------------------------
-def test_counterexample_copies1_under_20s() -> None:
+def test_counterexample_copies1() -> None:
     from glref.counterexample import build_counterexample_instance
 
     inst = build_counterexample_instance(1)
@@ -460,7 +461,7 @@ def test_counterexample_copies1_under_20s() -> None:
     dt = time.perf_counter() - t0
     assert_valid(res, inst, "counterexample copies=1")
     check_arborescence(inst, res)
-    assert dt < 20.0, dt
+    assert_within(dt, 20.0, "counterexample copies=1")
     assert res.stats["k_T_connected"] is False and res.stats["shift_calls"] >= 1
 
 
@@ -476,7 +477,7 @@ def test_counterexample_copies17() -> None:
     assert_valid(res, inst, "counterexample copies=17")
     check_arborescence(inst, res)
     print(f"\ncounterexample copies=17: {dt:.2f}s stats={ {k: res.stats[k] for k in ('steps', 'contractions', 'deletions', 'cycle_shifts', 'greedy_successes', 'max_flow_calls')} }")
-    assert dt < 300.0, dt
+    assert_within(dt, 300.0, "counterexample copies=17")
 
 
 # ---------------------------------------------------------------------------

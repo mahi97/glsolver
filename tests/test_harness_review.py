@@ -607,6 +607,7 @@ def test_debug_invariant_pre_empts_the_hang_but_the_bound_catches_it_anyway(
     assert review_time_limit <= time.monotonic() - t0 < review_time_limit + 5
 
 
+@pytest.mark.perf
 @pytest.mark.parametrize("harness", sorted({h for _m, h in HANGS}))
 def test_exhaustive_harness_bounds_a_real_hang(harness: str, patched_store: Path, review_time_limit: float,
                                                debug_invariants_off: None, monkeypatch: pytest.MonkeyPatch) -> None:

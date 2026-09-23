@@ -42,6 +42,7 @@ addopts = "-q"
 markers = [
     "slow: long-running tests (deselect with -m 'not slow')",
     "ilp: tests requiring an ILP solver",
+    "perf: asserts a wall-clock bound; opt in with --runperf (or GL_RUN_PERF=1) on a quiet machine",
 ]
 
 [tool.ruff]

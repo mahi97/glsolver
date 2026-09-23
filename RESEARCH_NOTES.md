@@ -598,6 +598,51 @@ re-routing pass toggled twice inside one process (`reroutes` 0 / 108 / 0). The C
 API can build.
 
 
+### E6. Final sweep on the optimized core (2026-09-23, 1 151 rows, 0 invalid, 0 timeouts, 0 errors)
+
+Re-run of the scaling, DAG and families grids after E3/E5, paired against the committed baseline on
+`instance.sha256` (453/453 scaling and 252/252 DAG pairs are byte-identical instances, so the
+comparison is like for like). Raw rows in `benchmarks/results/*_v2.jsonl`, figures in
+`benchmarks/results/plots_v2/`, tables in `docs/benchmarks.md` §5.
+
+**Harary is no longer memory-bound.** The baseline could not run it past n = 2 000 (56.5 GB); it now
+reaches n = 10 000 in 418 s using 2.7 GB. Matched speed-ups at n ≥ 500: geometric mean 4.94× for the
+general solver (range 2.94–8.73×) and 10.85× for the weighted solver, with memory 86–229× lower. The
+fitted exponent falls from 3.3 to **2.76**.
+
+**Unexpected: the DAG solver became 2–4× faster.** Nothing in E3 targeted it, but the flow-engine
+micro-optimizations also shortened the CSR/topological pass that dominates it. At n = 10⁶
+(m ≈ 5·10⁶) every variant/policy pair went from 1.96–2.37 s to **0.238–0.696 s** single-threaded.
+Control: the pure-Python `reference-dag` on the very same instances is unchanged (0.74–0.99×), as it
+must be since no Python changed.
+
+**P1 refined.** E2 concluded heap ≈ stack "within noise". With the faster core the difference becomes
+visible on *layered* DAGs, where the O(n+m) stack variant is reproducibly faster: 0.746–0.790× at
+n = 10⁵ (median of 3 trials × 2 seeds, all three policies) and 0.672–0.688× at n = 10⁶. On the two
+random k-T DAG families it remains a wash (0.85–1.25×). So P1's asymptotic gain is real but only
+surfaces once the constant factors around it are small enough, and only where the in-lists are long.
+
+**A measurement bug in our own harness, found and fixed.** `ru_maxrss` is inherited across `fork`, so
+a worker spawned from a driver that had just built a 10⁷-arc instance reported the *driver's*
+footprint as its own. Demonstration: a child of a 3 GB parent reports 2 879 MB peak when its true
+peak is 18 MB. Every peak-memory figure in E2 and in the first pass of this sweep is therefore an
+upper bound clamped to the driver's high-water mark, and the affected rows are exactly the ones that
+report suspiciously identical values (4 093.7 / 4 106.5 MB). Both `benchmarks/runner.py` and
+`glsolver.api` now read `VmHWM` from `/proc/self/status`, which is per-process and exec-accurate.
+Corrected direct measurements (solver run in its own process, instance footprint separated):
+
+| instance | arcs | instance in memory | peak total | solver's own share |
+|---|---:|---:|---:|---:|
+| Harary H_{4,10000} | 39 984 | 64 MB | 2 794 MB | ~2 730 MB |
+| Harary H_{4,5000} | 19 984 | 56 MB | 755 MB | ~699 MB |
+| Erdős–Rényi n = 10 000 | 10 000 610 | 2 574 MB | 2 864 MB | **~290 MB** |
+| sparse k-connected n = 10 000 | 41 984 | 65 MB | 144 MB | ~79 MB |
+| random 4-regular n = 10 000 | 39 984 | 65 MB | 102 MB | ~37 MB |
+
+The dense instance is dominated by the *input representation*, not by the algorithm: the solver adds
+290 MB on top of a 2.6 GB instance. The sparse high-diameter instance is the opposite, and is where
+the certificates themselves cost memory.
+
 ## Failed ideas
 
 * **Reusing an undirected global cut structure (Gomory–Hu / cactus) across the

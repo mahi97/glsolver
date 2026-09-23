@@ -138,6 +138,7 @@ def _fault_config(sizes: list[int], timeout: float = 1.0) -> dict[str, Any]:
             "algorithms": ["reference"], "repeats": 1, "warmup": 0, "timeout": timeout, "threads": 1}
 
 
+@pytest.mark.perf
 def test_fault_injection_rows_and_the_run_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                     survivable_core: bool) -> None:
     """A hang, an exception, a segfault and a bogus partition each produce one row with the

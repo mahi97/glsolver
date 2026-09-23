@@ -709,6 +709,22 @@ def algorithm_runs(cfg: BenchConfig, algo: str) -> list[tuple[str, dict[str, Any
 # worker (runs in the subprocess)
 # ---------------------------------------------------------------------------
 def _rss_mb(ru: resource.struct_rusage) -> float:
+    """Peak resident set of the worker, in MiB.
+
+    ``ru_maxrss`` is inherited across ``fork``, so a worker spawned from a
+    driver that has just generated a 10^7-arc instance reports the *driver's*
+    footprint as its own (measured: a child of a 3 GB parent reports 2 879 MB
+    when its true peak is 18 MB; this silently clamped the memory column of
+    earlier sweeps to the driver's high-water mark).  Linux reports the honest
+    figure as ``VmHWM`` in ``/proc/self/status``; ``ru_maxrss`` is the fallback.
+    """
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmHWM:"):
+                    return float(line.split()[1]) / 1024.0
+    except OSError:
+        pass
     return ru.ru_maxrss / (1024.0 * 1024.0) if sys.platform == "darwin" else ru.ru_maxrss / 1024.0
 
 

@@ -1,0 +1,16 @@
+{
+  "name": "scaling_v2",
+  "description": "v2 stage A-ref: pure-Python reference / reference-weighted at n <= 50, 3 seeds, one timed trial each (they are 3-4 orders of magnitude slower than the core).",
+  "families": ["harary", "random_regular", "erdos_renyi", "sparse_k_connected", "random_kT_dag"],
+  "sizes": [10, 20, 50],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [1, 2, 3],
+  "variants": ["plain"],
+  "algorithms": ["reference", "reference-weighted"],
+  "algorithm_limits": {"reference": {"max_n": 100}, "reference-weighted": {"max_n": 100}},
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 300,
+  "threads": 8
+}

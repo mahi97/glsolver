@@ -667,6 +667,7 @@ def test_stats_and_time_keys() -> None:
     ("harary(2000,8) unit", lambda: generators.harary_graph(2000, 8, seed=1)),
     ("harary(2000,8) w_max=5", lambda: generators.weighted_variant(generators.harary_graph(2000, 8, seed=1), 3, 5, 0)),
 ])
+@pytest.mark.perf
 def test_scaling_smoke(label: str, builder) -> None:
     inst = builder()
     t0 = time.perf_counter()
@@ -685,6 +686,7 @@ def test_scaling_smoke(label: str, builder) -> None:
     assert dt < 120.0, dt
 
 
+@pytest.mark.perf
 @pytest.mark.skipif("asan" in os.environ.get("LD_PRELOAD", ""), reason="wall-clock bound is meaningless under sanitizers")
 def test_medium_scaling_fast() -> None:
     """A medium instance in the default test run: unit and weighted, with the arborescence checked."""

@@ -1,0 +1,16 @@
+{
+  "name": "harary_rss",
+  "description": "Clean peak-RSS re-measurement for Harary at n = 5000 and 10000: harary only, so the driver process never holds a large instance and child ru_maxrss is not inflated by the copy-on-write floor it inherits at spawn.",
+  "families": ["harary"],
+  "sizes": [5000, 10000],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [1],
+  "variants": ["plain"],
+  "algorithms": ["general"],
+  "repeats": 1,
+  "warmup": 0,
+  "timeout": 900,
+  "grace": 30,
+  "threads": 8
+}

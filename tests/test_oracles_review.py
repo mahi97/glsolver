@@ -483,6 +483,7 @@ def test_seed_changes_order_but_not_the_solution_set():
     assert list(enumerate_partitions(inst, limit=-3)) == []
 
 
+@pytest.mark.perf
 @pytest.mark.ilp
 def test_time_limits_report_timeout_or_a_valid_partition():
     inst = make_instance(81, grid(9, 9).edges(), [0, 80, 40, 8], [20, 20, 19, 18], directed=False)

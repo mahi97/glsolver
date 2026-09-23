@@ -1,0 +1,20 @@
+{
+  "name": "scaling_v2",
+  "description": "v2 stage A: core solvers general/weighted/dag on all five families, n <= 2000, k=4, 3 seeds, repeat 3, threads 8; reference-dag/bruteforce/ilp at their configured limits.",
+  "families": ["harary", "random_regular", "erdos_renyi", "sparse_k_connected", "random_kT_dag"],
+  "sizes": [10, 20, 50, 100, 200, 500, 1000, 2000],
+  "k": [4],
+  "modes": ["balanced"],
+  "seeds": [1, 2, 3],
+  "variants": ["plain"],
+  "algorithms": ["general", "weighted", "dag", "reference-dag", "bruteforce", "ilp"],
+  "algorithm_limits": {
+    "reference-dag": {"max_n": 10000},
+    "bruteforce": {"max_n": 12},
+    "ilp": {"max_n": 40}
+  },
+  "repeats": 3,
+  "warmup": 1,
+  "timeout": 600,
+  "threads": 8
+}
