@@ -14,7 +14,7 @@ Status: version 0.1.0, MIT, Python ≥ 3.10; the C++ core is optional (every alg
 in pure Python). 2 469 tests across 31 suites pass (pytest + Hypothesis). Every connected graph on
 `n ≤ 7` (145 400 instances) and every digraph on `n ≤ 4` with `k ∈ {1,2}` (3 278 instances) is
 solved by the reference *and* the C++ solvers with debug assertions, 0 failures. Final benchmark
-tables: see `docs/benchmarks.md`.
+tables: see `docs/benchmarks.md`.  CI is green on Python 3.10 and 3.12, including sanitizer and Docker jobs.
 
 ## 1. The Győri–Lovász theorem in plain language
 

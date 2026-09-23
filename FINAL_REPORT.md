@@ -139,7 +139,24 @@ i.e. the naive contract/delete strategy really is stuck — while the paper's
 condition still admits a witness, so the new algorithm solves it. The 17-copy
 instance (n = 3 789, m = 33 264, k = 9) is solved in about a second.
 
-### 5.5 Mutation testing of the harness
+### 5.5 A false "infeasible" from the MILP oracle, found and fixed
+
+Continuous integration on Python 3.10 exposed a defect that never appeared
+locally. On an 8-vertex directed instance that is verified `k`-`T`-connected,
+and whose partition brute force finds, the HiGHS shipped with scipy 1.15.3
+reported the model **infeasible**; the same solver solves it to optimality once
+presolve is disabled, and scipy 1.18.1 solves it either way. Because this
+oracle's "infeasible" is used as *proof* that no partition exists, it now
+re-solves once with presolve off and only reports infeasible if the verdict
+survives. The triggering instance is stored under `regression/`.
+
+Two lessons are worth recording. First, a baseline that can silently claim
+non-existence is more dangerous than a slow one, so an oracle's negative answer
+needs corroboration. Second, the bug was only reachable through a dependency
+version we do not use locally — which is the argument for testing the oldest
+supported Python in CI rather than only the newest.
+
+### 5.6 Mutation testing of the harness
 
 Six deliberate bugs were injected into the reference solver (skipped capacity
 check, random cycle shift, illegal contraction, swapped vertices, stale
@@ -346,3 +363,9 @@ docker build -t glsolver . && docker run --rm glsolver solve --help
 
 Every random choice is seeded; every benchmark row carries the machine, the
 git commit, the thread environment and a hash of the instance file.
+
+Continuous integration is green on Python 3.10 and 3.12: the suite is split
+into nine named groups (so a failure is identifiable from the public jobs API,
+whose logs need authentication), plus a job that rebuilds the core under
+AddressSanitizer and UndefinedBehaviorSanitizer and a job that builds and runs
+the Docker image.
