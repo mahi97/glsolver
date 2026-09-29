@@ -26,7 +26,7 @@ bit-for-bit as a regression test (§5.4).
 | Optimized core: DAG solver (heap + O(n+m) variant) | `src/glcore/dag.cpp` | complete |
 | Independent verifier | `src/glsolver/verify.py` | complete, shares no code with any solver |
 | Oracles: exhaustive brute force, MILP (HiGHS) | `src/glsolver/oracle/` | complete |
-| Seeded instance generators (19 families) | `src/glsolver/generators.py` | complete |
+| Seeded instance generators (21 entries in `family_catalog()`) | `src/glsolver/generators.py` | complete |
 | Python API, dispatcher, CLI | `src/glsolver/{api,cli}.py` | complete |
 | Step-by-step visualization (SVG/PNG/PDF/HTML/GIF) | `src/glsolver/viz/` | complete, 7 curated examples |
 | Benchmark framework + verification dashboard | `benchmarks/` | complete, 8 grids |
@@ -120,7 +120,7 @@ that no partition exists.
 
 ### 5.3 Differential and property testing
 
-2 599 tests pass (33 files; Hypothesis property tests with `ci`, `dev` and
+2 584 tests pass, 21 skipped of 2 605 collected (33 files; Hypothesis property tests with `ci`, `dev` and
 `thorough` profiles). The C++ primitives were fuzzed against the reference on
 roughly 4 400 instances (identical tightest cuts, identical essential sets
 after random operation sequences, identical criticality for every vertex and

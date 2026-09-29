@@ -417,7 +417,7 @@ the state of the project once the core is built and registered, i.e. with the
 backends `reference`, `reference-weighted`, `reference-dag`, `general`,
 `weighted`, `dag`, `bruteforce` and `ilp` all available.
 
-**Test suite.**  2 469 tests across 31 suites pass (pytest; Hypothesis at the
+**Test suite.**  2 584 tests across 33 files pass (21 skipped of 2 605 collected under `-m "not slow"`; pytest; Hypothesis at the
 `ci`, `dev` and `thorough` profiles).  Every theorem solver runs with
 `debug=True` — the reference checks the paper's invariants A1–A8 (§7.2), the
 C++ backends their own `debug_asserts` — and every call runs under the time
@@ -455,7 +455,7 @@ re-checked by `glref.counterexample.check_counterexample_claims`.
 | instance | `n` / `m` / `k` | result |
 |---|---|---|
 | 1 copy, `algorithm="reference"` | 333 / 2 160 / 9 | valid partition after 900 s of pure Python (§9) |
-| 17 copies, C++ `general` | 3 789 / 33 264 / 9 | valid partition in 1.8 s |
+| 17 copies, C++ `general` | 3 789 / 33 264 / 9 | valid partition in 0.47 s (the later sweep, `docs/benchmarks.md` §5.3; an earlier run on a loaded machine measured 1.8 s) |
 | 17 copies, C++ `weighted` | 3 789 / 33 264 / 9 | valid partition in 1.4 s |
 
 This is the instance the FEAC machinery was invented to survive: compact

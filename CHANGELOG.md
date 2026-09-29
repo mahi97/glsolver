@@ -136,7 +136,7 @@ Paper labels below are those of `docs/paper_notes.md`.
 
 ### Correctness and verification
 
-* 2 469 tests across 31 suites (pytest, Hypothesis with `ci`/`dev`/`thorough`
+* 2 584 tests across 33 files (pytest, Hypothesis with `ci`/`dev`/`thorough`
   profiles), including per-module adversarial review suites.
 * Exhaustive: every connected graph on `n ≤ 7` (145 400 instances) and every
   digraph on `n ≤ 4` with `k ∈ {1,2}` (3 278 instances) solved by the reference
