@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* `benchmarks/compare/` — a comparison harness that runs the same instances
+  through OR-Tools CP-SAT, HiGHS, SCIP, CBC, Gurobi, METIS, KaHIP, Mt-KaHyPar,
+  Scotch and NetworKit, one subprocess per run, every answer re-checked by the
+  independent verifier. Results in `benchmarks/results/compare/`.
+* `docs/comparison.md` — the measured comparison, the four places competing
+  tools are genuinely better, and the search that found no prior implementation
+  of a Győri–Lovász partition anywhere.
+
+### Fixed
+
+* `glsolver.oracle.bruteforce` died with `RecursionError` on instances from
+  roughly `n = 450` upwards (reproduced on `erdos_renyi_graph(2000, 0.2, 4,
+  seed=1)`): the search nests one generator frame per branching decision and
+  CPython's default recursion limit is 1000. The oracle now raises the limit to
+  what the instance needs, restores it afterwards, and reports a new
+  `"depth_limit"` status instead of raising when the ceiling genuinely binds.
+  That instance now solves in 0.35 s. Found by the comparison harness above.
+
 ## 0.1.0 (2026-09-21)
 
 First release: a complete, independently written implementation of the

@@ -154,6 +154,26 @@ solver ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) §E6). The ten optimizations behi
 each with a correctness argument — and the shortcuts that are *not* valid — are in
 [docs/optimizations.md](docs/optimizations.md).
 
+### Against other software
+
+There is no other implementation to race. An exhaustive search of GitHub, Zenodo, Software
+Heritage and the literature found no code computing a Győri–Lovász partition anywhere — not in
+NetworkX, SageMath, igraph or LEMON, not for Győri's exponential cascade, and not for any of the
+published `k ≤ 4` special cases. The paper's authors released a 5-file counterexample checker and
+no algorithm.
+
+So the comparison is against general-purpose optimisation on the same 36 instances, 300 s each,
+every answer re-checked by the verifier. glsolver solved **36/36 in 8.77 s total**. OR-Tools
+CP-SAT, the strongest alternative, solved 32 and is **85–170× slower** where it succeeds; the best
+free MILP stack stops at `n = 100–200` on Harary graphs, where glsolver does `n = 2000` in 3.71 s.
+Graph partitioners given fixed roots and exact block weights fail on connectivity: Mt-KaHyPar, the
+best of them, still returns a disconnected part on every Harary instance from `n = 50` up.
+
+Two things the alternatives do better: a MILP's `Infeasible` is a real proof that no partition
+exists, which this solver cannot produce, and the pure-Python reference path loses to CBC and SCIP
+past `n = 200`. Full method-by-method tables, configurations and caveats:
+[docs/comparison.md](docs/comparison.md).
+
 ## Correctness evidence
 
 | evidence | scale | result | source |
@@ -244,6 +264,7 @@ regression/        permanently stored regression instances (JSON)
 | [docs/implementation.md](docs/implementation.md) | layers, dispatcher, determinism, debug and sanitizer builds |
 | [docs/verification.md](docs/verification.md) | verifier, oracles, exhaustive and property tests, regression store, results |
 | [docs/benchmarks.md](docs/benchmarks.md) | what is measured, methodology, configurations, reproduction, result tables |
+| [docs/comparison.md](docs/comparison.md) | measured against CP-SAT, HiGHS, SCIP, CBC, Gurobi, METIS, KaHIP, Mt-KaHyPar, Scotch, and the search for any prior implementation |
 | [docs/api.md](docs/api.md) | `glpartition`/`partition` contract, `GLResult` fields, precondition semantics |
 | [docs/instance_format.md](docs/instance_format.md) | canonical instance/solution JSON and the edge-list format |
 

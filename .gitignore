@@ -23,3 +23,4 @@ _skbuild/
 /tmp/
 benchmarks/instances/
 tests/.exhaustive_tally.json
+benchmarks/results/compare/*.log
