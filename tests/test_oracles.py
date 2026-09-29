@@ -402,3 +402,47 @@ def test_random_directed_weighted_agreement():
             n_inf += 1
             assert found == []
     assert n_ok >= 5 and n_inf >= 5
+
+
+def test_bruteforce_survives_deep_recursion():
+    """A search deeper than CPython's default limit must not raise.
+
+    Regression: on ``erdos_renyi_graph(2000, 0.2, 4, seed=1)`` the oracle used
+    to die with ``RecursionError`` before returning anything, because the
+    search nests one generator frame per branching decision and the default
+    recursion limit is 1000.  The oracle now raises the limit to what the
+    instance needs and restores it afterwards.
+    """
+    import sys
+
+    from glsolver.generators import erdos_renyi_graph
+
+    inst = erdos_renyi_graph(2000, 0.2, 4, seed=1)
+    before = sys.getrecursionlimit()
+    st, parts = bruteforce_partition(inst, time_limit=120.0)
+    assert sys.getrecursionlimit() == before, "recursion limit was not restored"
+    assert st == "ok"
+    assert_valid(inst, parts)
+
+
+def test_bruteforce_depth_limit_is_a_reported_status():
+    """The depth ceiling is surfaced as a status, never as an exception.
+
+    The ceiling only binds above CPython's default limit, so the probe lowers
+    it to just past 1000 on an instance that genuinely needs thousands of
+    frames.
+    """
+    import sys
+
+    from glsolver.generators import erdos_renyi_graph
+    from glsolver.oracle import bruteforce as bf
+
+    inst = erdos_renyi_graph(2000, 0.2, 4, seed=1)
+    before = sys.getrecursionlimit()
+    old = bf._RECURSION_CEILING
+    try:
+        bf._RECURSION_CEILING = before + 1  # far below what this instance needs
+        assert bruteforce_partition(inst, time_limit=120.0) == ("depth_limit", None)
+    finally:
+        bf._RECURSION_CEILING = old
+    assert sys.getrecursionlimit() == before, "recursion limit was not restored"

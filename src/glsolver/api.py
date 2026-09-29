@@ -366,7 +366,12 @@ def _run_oracle(inst: Instance, algo: str, opts: dict[str, Any]) -> GLResult:
         from glsolver.oracle.ilp import ilp_partition
 
         status, parts = ilp_partition(inst, time_limit=tl)
-    msg = {"ok": "ok", "infeasible": "no partition exists (exhaustive/exact oracle)", "timeout": "time limit reached"}[status]
+    msg = {
+        "ok": "ok",
+        "infeasible": "no partition exists (exhaustive/exact oracle)",
+        "timeout": "time limit reached",
+        "depth_limit": "search depth limit reached (oracle abandoned the search)",
+    }[status]
     return GLResult(inst, algo, status, [list(p) for p in parts] if parts else [], [], message=msg)
 
 

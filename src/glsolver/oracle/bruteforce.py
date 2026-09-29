@@ -27,7 +27,9 @@ checked directly for size/weight and connectivity.
 """
 from __future__ import annotations
 
+import contextlib
 import random
+import sys
 import time
 from typing import Iterator
 
@@ -35,9 +37,46 @@ from glsolver.instance import Instance
 
 _TIME_CHECK_PERIOD = 256
 
+#: Hard ceiling on the interpreter recursion limit we are willing to request.
+#: The search needs O(n) nested generator frames (one per branching decision,
+#: see "Search strategy" above), which exceeds CPython's default limit of 1000
+#: from roughly n = 450 upwards.  We raise the limit to what the instance needs
+#: rather than letting a ``RecursionError`` escape as a crash, but we refuse to
+#: go past this ceiling: beyond it the interpreter's own C stack, not the
+#: Python limit, becomes the binding constraint.
+_RECURSION_CEILING = 10_000
+
 
 class _Timeout(Exception):
     """Internal signal: the deadline has been exceeded."""
+
+
+def _frames_needed(inst: Instance) -> int:
+    """Upper bound on the nested frames :class:`_Search` needs for ``inst``.
+
+    Each vertex is decided at most once per part it is offered to, and every
+    decision costs one ``_extend`` frame plus one ``yield from`` delegation
+    frame; ``_part`` adds one frame per part.  ``2 * (n + k)`` bounds both,
+    and the constant covers the caller's own stack.
+    """
+    return 2 * (inst.n + len(inst.terminals)) + 200
+
+
+@contextlib.contextmanager
+def _recursion_headroom(inst: Instance):
+    """Temporarily raise the recursion limit to what ``inst`` needs.
+
+    Never lowers an already-higher limit, never exceeds
+    :data:`_RECURSION_CEILING`, and always restores the previous value.
+    """
+    want = min(_frames_needed(inst), _RECURSION_CEILING)
+    old = sys.getrecursionlimit()
+    if want > old:
+        sys.setrecursionlimit(want)
+    try:
+        yield
+    finally:
+        sys.setrecursionlimit(old)
 
 
 class _Search:
@@ -238,11 +277,12 @@ def enumerate_partitions(
         return
     search = _Search(inst, deadline=None, rng=random.Random(seed))
     count = 0
-    for parts in search.solutions():
-        yield parts
-        count += 1
-        if limit is not None and count >= limit:
-            return
+    with _recursion_headroom(inst):
+        for parts in search.solutions():
+            yield parts
+            count += 1
+            if limit is not None and count >= limit:
+                return
 
 
 def bruteforce_partition(
@@ -254,7 +294,10 @@ def bruteforce_partition(
     """Exact, complete backtracking search for a Győri–Lovász partition.
 
     Returns ``(status, parts)`` with ``status`` in ``{"ok", "infeasible",
-    "timeout"}``.  ``"infeasible"`` is a *proof* that no partition satisfies
+    "timeout", "depth_limit"}``.  ``"depth_limit"`` means the search needed
+    more nested frames than :data:`_RECURSION_CEILING` allows and was
+    abandoned; like ``"timeout"`` it proves nothing about the instance.
+    ``"infeasible"`` is a *proof* that no partition satisfies
     the conditions of docs/paper_notes.md §1.2 / §1.3 with
     [Def connected-to]; no connectivity precondition ([Def 3.2], [Def 5.1]) is
     assumed.  ``time_limit`` is in seconds; ``seed`` only affects which of
@@ -263,10 +306,13 @@ def bruteforce_partition(
     deadline = None if time_limit is None else time.perf_counter() + float(time_limit)
     search = _Search(inst, deadline=deadline, rng=random.Random(seed))
     try:
-        for parts in search.solutions():
-            return "ok", parts
+        with _recursion_headroom(inst):
+            for parts in search.solutions():
+                return "ok", parts
     except _Timeout:
         return "timeout", None
+    except RecursionError:
+        return "depth_limit", None
     return "infeasible", None
 
 
